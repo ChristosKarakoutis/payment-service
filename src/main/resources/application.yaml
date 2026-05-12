@@ -1,0 +1,20 @@
+spring:
+  application:
+    name: payment-system
+
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5433/payment_system}
+    username: ${DB_USERNAME:admin}
+    password: ${DB_PASSWORD:admin}
+    driver-class-name: org.postgresql.Driver
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+
+security:
+  jwt:
+    public-key: ${JWT_PUBLIC_KEY:classpath:keys/public.pem}
