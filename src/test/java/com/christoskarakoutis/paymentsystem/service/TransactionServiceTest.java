@@ -2,11 +2,14 @@ package com.christoskarakoutis.paymentsystem.service;
 
 import com.christoskarakoutis.paymentsystem.dto.TransactionRequest;
 import com.christoskarakoutis.paymentsystem.dto.TransactionResponse;
+import com.christoskarakoutis.paymentsystem.entity.LedgerEntry;
+import com.christoskarakoutis.paymentsystem.entity.LedgerEntryType;
 import com.christoskarakoutis.paymentsystem.entity.Transaction;
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
+import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -36,22 +39,32 @@ class TransactionServiceTest {
     private TransactionRepository transactionRepository;
     @Mock
     private WalletRepository walletRepository;
+    @Mock
+    private LedgerEntryRepository ledgerEntryRepository;
 
     private TransactionService transactionService;
 
     private Wallet sourceWallet;
     private Wallet targetWallet;
 
+    private LedgerEntry lastSourceEntry;
+    private LedgerEntry lastTargetEntry;
+
     @BeforeEach
     void setUp() throws Exception {
-        transactionService = new TransactionService(transactionRepository, walletRepository);
+        transactionService = new TransactionService(transactionRepository, walletRepository, ledgerEntryRepository);
 
         Field feeField = TransactionService.class.getDeclaredField("feePercentage");
         feeField.setAccessible(true);
         feeField.set(transactionService, 2.5);
 
-        sourceWallet = new Wallet("src-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
-        targetWallet = new Wallet("tgt-1", "user-2", WalletType.PEER, new BigDecimal("50.00"), "EUR", null, null);
+        sourceWallet = new Wallet("src-1", "user-1", WalletType.PEER, "EUR", null, null);
+        targetWallet = new Wallet("tgt-1", "user-2", WalletType.PEER, "EUR", null, null);
+
+        lastSourceEntry = LedgerEntry.builder()
+                .accountId("src-1").runningBalance(new BigDecimal("200.00")).build();
+        lastTargetEntry = LedgerEntry.builder()
+                .accountId("tgt-1").runningBalance(new BigDecimal("50.00")).build();
     }
 
     private TransactionRequest request(String idempotencyKey) {
@@ -95,13 +108,17 @@ class TransactionServiceTest {
     }
 
     @Test
-    @DisplayName("completes PEER to PEER transfer")
+    @DisplayName("completes PEER to PEER transfer with ledger entries")
     void executeAtomicTransfer_succeedsForPeerToPeer() {
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+                .thenReturn(Optional.of(lastSourceEntry));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("tgt-1"))
+                .thenReturn(Optional.of(lastTargetEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
 
@@ -110,16 +127,34 @@ class TransactionServiceTest {
         assertThat(response.targetWalletId()).isEqualTo("tgt-1");
         assertThat(response.amount()).isEqualByComparingTo(new BigDecimal("100.00"));
 
-        assertThat(sourceWallet.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
-        assertThat(targetWallet.getBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
+        ArgumentCaptor<LedgerEntry> captor = ArgumentCaptor.forClass(LedgerEntry.class);
+        verify(ledgerEntryRepository, times(2)).save(captor.capture());
+        List<LedgerEntry> entries = captor.getAllValues();
+
+        LedgerEntry debit = entries.get(0);
+        assertThat(debit.getType()).isEqualTo(LedgerEntryType.DEBIT);
+        assertThat(debit.getAmount()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(debit.getRunningBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(debit.getAccountId()).isEqualTo("src-1");
+
+        LedgerEntry credit = entries.get(1);
+        assertThat(credit.getType()).isEqualTo(LedgerEntryType.CREDIT);
+        assertThat(credit.getAmount()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(credit.getRunningBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
+        assertThat(credit.getAccountId()).isEqualTo("tgt-1");
     }
 
     @Test
     @DisplayName("completes PEER to MERCHANT transfer with fee deduction")
     void executeAtomicTransfer_succeedsForPeerToMerchant() {
-        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
-        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, new BigDecimal("50.00"), "EUR", null, null);
-        Wallet feeWallet = new Wallet("fee-1", "SERVICE-FEE", WalletType.SERVICE_FEE, BigDecimal.ZERO, "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, "EUR", null, null);
+        Wallet feeWallet = new Wallet("fee-1", "SERVICE-FEE", WalletType.SERVICE_FEE, "EUR", null, null);
+
+        LedgerEntry peerEntry = LedgerEntry.builder()
+                .accountId("peer-1").runningBalance(new BigDecimal("200.00")).build();
+        LedgerEntry merchantEntry = LedgerEntry.builder()
+                .accountId("merc-1").runningBalance(new BigDecimal("50.00")).build();
 
         TransactionRequest p2mRequest = new TransactionRequest(
                 "p2m-key", "peer-1", "merc-1",
@@ -132,22 +167,52 @@ class TransactionServiceTest {
         when(walletRepository.findByUserIdWithLock("SERVICE-FEE")).thenReturn(Optional.of(feeWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("peer-1"))
+                .thenReturn(Optional.of(peerEntry));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("merc-1"))
+                .thenReturn(Optional.of(merchantEntry));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("fee-1"))
+                .thenReturn(Optional.empty());
 
         TransactionResponse response = transactionService.executeAtomicTransfer(p2mRequest);
 
         assertThat(response.status()).isEqualTo("COMPLETED");
         assertThat(response.amount()).isEqualByComparingTo(new BigDecimal("100.00"));
 
-        assertThat(peerWallet.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
-        assertThat(merchantWallet.getBalance()).isEqualByComparingTo(new BigDecimal("147.50"));
-        assertThat(feeWallet.getBalance()).isEqualByComparingTo(new BigDecimal("2.50"));
+        ArgumentCaptor<LedgerEntry> captor = ArgumentCaptor.forClass(LedgerEntry.class);
+        verify(ledgerEntryRepository, times(4)).save(captor.capture());
+        List<LedgerEntry> entries = captor.getAllValues();
+
+        // DEBIT on peer
+        assertThat(entries.get(0).getType()).isEqualTo(LedgerEntryType.DEBIT);
+        assertThat(entries.get(0).getAccountId()).isEqualTo("peer-1");
+        assertThat(entries.get(0).getAmount()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(entries.get(0).getRunningBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
+
+        // CREDIT on merchant
+        assertThat(entries.get(1).getType()).isEqualTo(LedgerEntryType.CREDIT);
+        assertThat(entries.get(1).getAccountId()).isEqualTo("merc-1");
+        assertThat(entries.get(1).getAmount()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(entries.get(1).getRunningBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
+
+        // DEBIT on merchant (fee)
+        assertThat(entries.get(2).getType()).isEqualTo(LedgerEntryType.DEBIT);
+        assertThat(entries.get(2).getAccountId()).isEqualTo("merc-1");
+        assertThat(entries.get(2).getAmount()).isEqualByComparingTo(new BigDecimal("2.50"));
+        assertThat(entries.get(2).getRunningBalance()).isEqualByComparingTo(new BigDecimal("147.50"));
+
+        // CREDIT on fee wallet
+        assertThat(entries.get(3).getType()).isEqualTo(LedgerEntryType.CREDIT);
+        assertThat(entries.get(3).getAccountId()).isEqualTo("fee-1");
+        assertThat(entries.get(3).getAmount()).isEqualByComparingTo(new BigDecimal("2.50"));
+        assertThat(entries.get(3).getRunningBalance()).isEqualByComparingTo(new BigDecimal("2.50"));
     }
 
     @Test
     @DisplayName("throws when MERCHANT initiates a send without referenceTransactionId")
     void executeAtomicTransfer_throwsForMerchantInitiatedSend() {
-        Wallet merchantWallet = new Wallet("merc-1", "user-1", WalletType.MERCHANT, new BigDecimal("200.00"), "EUR", null, null);
-        Wallet peerWallet = new Wallet("peer-1", "user-2", WalletType.PEER, new BigDecimal("50.00"), "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", "user-1", WalletType.MERCHANT, "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", "user-2", WalletType.PEER, "EUR", null, null);
 
         TransactionRequest badRequest = new TransactionRequest(
                 "bad-key", "merc-1", "peer-1",
@@ -166,35 +231,46 @@ class TransactionServiceTest {
     @Test
     @DisplayName("returns FAILED when source has insufficient balance")
     void executeAtomicTransfer_returnsFailedOnInsufficientBalance() {
-        sourceWallet.setBalance(new BigDecimal("10.00"));
+        LedgerEntry lowBalanceEntry = LedgerEntry.builder()
+                .accountId("src-1").runningBalance(new BigDecimal("10.00")).build();
 
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+                .thenReturn(Optional.of(lowBalanceEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
 
         assertThat(response.status()).isEqualTo("FAILED");
-        assertThat(sourceWallet.getBalance()).isEqualByComparingTo(new BigDecimal("10.00"));
-        assertThat(targetWallet.getBalance()).isEqualByComparingTo(new BigDecimal("50.00"));
+        verify(ledgerEntryRepository, never()).save(any(LedgerEntry.class));
     }
 
     @Test
-    @DisplayName("completes transfer with correct balance updates")
+    @DisplayName("completes transfer with correct ledger entries")
     void executeAtomicTransfer_updatesBalances() {
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+                .thenReturn(Optional.of(lastSourceEntry));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("tgt-1"))
+                .thenReturn(Optional.of(lastTargetEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
 
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(sourceWallet.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
-        assertThat(targetWallet.getBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
+
+        ArgumentCaptor<LedgerEntry> captor = ArgumentCaptor.forClass(LedgerEntry.class);
+        verify(ledgerEntryRepository, times(2)).save(captor.capture());
+        List<LedgerEntry> entries = captor.getAllValues();
+
+        assertThat(entries.get(0).getRunningBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(entries.get(1).getRunningBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
     }
 
     // ── refundTransaction ───────────────────────────────────────────────
@@ -220,8 +296,13 @@ class TransactionServiceTest {
     @Test
     @DisplayName("refund of P2M skips merchant type check and succeeds")
     void refundTransaction_skipsTypeCheck() {
-        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
-        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, new BigDecimal("100.00"), "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, "EUR", null, null);
+
+        LedgerEntry merchantEntry = LedgerEntry.builder()
+                .accountId("merc-1").runningBalance(new BigDecimal("100.00")).build();
+        LedgerEntry peerEntry = LedgerEntry.builder()
+                .accountId("peer-1").runningBalance(new BigDecimal("100.00")).build();
 
         Transaction original = Transaction.builder()
                 .id("orig-p2m").idempotencyKey("orig-p2m-key")
@@ -237,6 +318,10 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("merc-1"))
+                .thenReturn(Optional.of(merchantEntry));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("peer-1"))
+                .thenReturn(Optional.of(peerEntry));
 
         TransactionResponse response = transactionService.refundTransaction("orig-p2m");
 

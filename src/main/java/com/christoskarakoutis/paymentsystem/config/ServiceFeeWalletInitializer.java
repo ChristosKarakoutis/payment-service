@@ -8,8 +8,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 
-import java.math.BigDecimal;
-
 @Component
 @RequiredArgsConstructor
 @Slf4j
@@ -25,7 +23,6 @@ public class ServiceFeeWalletInitializer {
             Wallet feeWallet = Wallet.builder()
                     .userId(SERVICE_FEE_USER_ID)
                     .walletType(WalletType.SERVICE_FEE)
-                    .balance(BigDecimal.ZERO)
                     .currency("EUR")
                     .build();
             walletRepository.save(feeWallet);

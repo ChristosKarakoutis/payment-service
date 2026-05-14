@@ -8,7 +8,6 @@ import lombok.Builder;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
-import java.math.BigDecimal;
 import java.time.Instant;
 
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
@@ -31,9 +30,6 @@ public class Wallet {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private WalletType walletType;
-
-    @Column(nullable = false, precision = 19, scale = 4)
-    private BigDecimal balance;
 
     @Column(nullable = false, length = 3)
     @Builder.Default

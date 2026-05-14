@@ -1,9 +1,11 @@
 package com.christoskarakoutis.paymentsystem.service;
 
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
+import com.christoskarakoutis.paymentsystem.entity.LedgerEntry;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
+import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -26,19 +28,21 @@ class WalletServiceTest {
 
     @Mock
     private WalletRepository walletRepository;
+    @Mock
+    private LedgerEntryRepository ledgerEntryRepository;
 
     private WalletService walletService;
 
     @BeforeEach
     void setUp() {
-        walletService = new WalletService(walletRepository);
+        walletService = new WalletService(walletRepository, ledgerEntryRepository);
     }
 
     @Test
     @DisplayName("createWallet creates PEER by default")
     void createWallet_createsPeerByDefault() {
         Wallet savedWallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
 
@@ -56,7 +60,7 @@ class WalletServiceTest {
     @DisplayName("createWallet creates MERCHANT when specified")
     void createWallet_createsMerchantWhenSpecified() {
         Wallet savedWallet = new Wallet(
-                "wallet-2", "user-2", WalletType.MERCHANT, BigDecimal.ZERO, "EUR", null, null
+                "wallet-2", "user-2", WalletType.MERCHANT, "EUR", null, null
         );
         when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
 
@@ -74,9 +78,14 @@ class WalletServiceTest {
     @DisplayName("getWalletByUserId returns wallet when found")
     void getWalletByUserId_returnsWallet() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, new BigDecimal("100.00"), "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
         );
+        LedgerEntry lastEntry = LedgerEntry.builder()
+                .accountId("wallet-1").runningBalance(new BigDecimal("100.00")).build();
+
         when(walletRepository.findByUserId("user-1")).thenReturn(Optional.of(wallet));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+                .thenReturn(Optional.of(lastEntry));
 
         WalletResponse response = walletService.getWalletByUserId("user-1");
 
@@ -96,12 +105,14 @@ class WalletServiceTest {
     }
 
     @Test
-    @DisplayName("deleteWallet deletes wallet when found")
+    @DisplayName("deleteWallet deletes wallet when found and balance is zero")
     void deleteWallet_deletesWhenFound() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+                .thenReturn(Optional.empty());
 
         walletService.deleteWallet("wallet-1");
 
@@ -116,5 +127,25 @@ class WalletServiceTest {
         assertThatThrownBy(() -> walletService.deleteWallet("missing"))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("not found");
+    }
+
+    @Test
+    @DisplayName("deleteWallet throws when balance is non-zero")
+    void deleteWallet_throwsWhenNonZeroBalance() {
+        Wallet wallet = new Wallet(
+                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
+        );
+        LedgerEntry lastEntry = LedgerEntry.builder()
+                .accountId("wallet-1").runningBalance(new BigDecimal("50.00")).build();
+
+        when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+                .thenReturn(Optional.of(lastEntry));
+
+        assertThatThrownBy(() -> walletService.deleteWallet("wallet-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("non-zero balance");
+
+        verify(walletRepository, never()).delete(any());
     }
 }

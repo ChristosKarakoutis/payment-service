@@ -1,9 +1,12 @@
 package com.christoskarakoutis.paymentsystem.service;
 
+import com.christoskarakoutis.paymentsystem.entity.LedgerEntry;
+import com.christoskarakoutis.paymentsystem.entity.LedgerEntryType;
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
+import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import com.christoskarakoutis.paymentsystem.entity.Transaction;
@@ -27,6 +30,7 @@ public class TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final WalletRepository walletRepository;
+    private final LedgerEntryRepository ledgerEntryRepository;
 
     @Value("${payment.p2m.fee-percentage:2.5}")
     private double feePercentage;
@@ -95,7 +99,9 @@ public class TransactionService {
                     .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
         }
 
-        if (source.getBalance().compareTo(request.amount()) < 0) {
+        BigDecimal sourceBalance = getCurrentBalance(sourceId);
+
+        if (sourceBalance.compareTo(request.amount()) < 0) {
             if (!tx.getStatus().canTransitionTo(TransactionStatus.FAILED)) {
                 throw new IllegalStateException("Cannot transition to FAILED from " + tx.getStatus());
             }
@@ -104,18 +110,18 @@ public class TransactionService {
             return toResponse(tx);
         }
 
-        source.setBalance(source.getBalance().subtract(request.amount()));
-        target.setBalance(target.getBalance().add(request.amount()));
+        BigDecimal sourceNewBalance = sourceBalance.subtract(request.amount());
+        BigDecimal targetBalance = getCurrentBalance(targetId);
+        BigDecimal targetNewBalance = targetBalance.add(request.amount());
+
+        saveLedgerEntry(sourceId, tx.getId(), LedgerEntryType.DEBIT, request.amount(), sourceNewBalance);
+        saveLedgerEntry(targetId, tx.getId(), LedgerEntryType.CREDIT, request.amount(), targetNewBalance);
 
         if (isP2M) {
-            target.setBalance(target.getBalance().subtract(fee));
-            feeWallet.setBalance(feeWallet.getBalance().add(fee));
-        }
-
-        walletRepository.save(source);
-        walletRepository.save(target);
-        if (feeWallet != null) {
-            walletRepository.save(feeWallet);
+            BigDecimal merchantAfterFee = targetNewBalance.subtract(fee);
+            BigDecimal feeBalance = getCurrentBalance(feeWallet.getId());
+            saveLedgerEntry(targetId, tx.getId(), LedgerEntryType.DEBIT, fee, merchantAfterFee);
+            saveLedgerEntry(feeWallet.getId(), tx.getId(), LedgerEntryType.CREDIT, fee, feeBalance.add(fee));
         }
 
         if (!tx.getStatus().canTransitionTo(TransactionStatus.COMPLETED)) {
@@ -125,6 +131,23 @@ public class TransactionService {
         transactionRepository.save(tx);
 
         return toResponse(tx);
+    }
+
+    private BigDecimal getCurrentBalance(String accountId) {
+        return ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc(accountId)
+                .map(LedgerEntry::getRunningBalance)
+                .orElse(BigDecimal.ZERO);
+    }
+
+    private void saveLedgerEntry(String accountId, String transactionId, LedgerEntryType type, BigDecimal amount, BigDecimal runningBalance) {
+        LedgerEntry entry = LedgerEntry.builder()
+                .accountId(accountId)
+                .transactionId(transactionId)
+                .type(type)
+                .amount(amount)
+                .runningBalance(runningBalance)
+                .build();
+        ledgerEntryRepository.save(entry);
     }
 
     @Transactional

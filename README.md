@@ -40,13 +40,33 @@ Peer sends 100 → Merchant receives 97.50, Service fee wallet receives 2.50
 
 The sender's balance is only checked against the transfer amount (not amount + fee) — the merchant bears the cost. Refunds of P2M transfers return the full amount to the peer; the fee is **not** reversed. This matches real-world payment processing where merchant service fees are non-refundable.
 
+### Ledger entries (source of truth)
+
+Wallet balances are **not stored** on the `Wallet` entity. Instead, every balance-changing operation writes one or more immutable `LedgerEntry` rows:
+
+```
+ledger_entries
+├── account_id   → FK to wallets.id
+├── transaction_id → FK to transactions.id
+├── type         → DEBIT or CREDIT
+├── amount       → transaction amount
+├── running_balance → account balance after this entry
+└── created_at   → immutable timestamp
+```
+
+The current balance of any wallet is the `running_balance` of its most recent `LedgerEntry`. For new wallets with no entries, the balance is `0`. This provides a full audit trail — every debit and credit is recorded and can be reconstructed point-in-time.
+
+During a P2P transfer four entries are inserted (2 DEBIT/CREDIT pairs). During a P2M transfer six entries are inserted (accounting for the fee deduction from the merchant and credit to the `SERVICE_FEE` wallet).
+
 ### Idempotency keys
 
 Every transfer request includes an `idempotencyKey` (client-generated UUID). If a request fails due to a network error and the client retries with the same key, the service returns the original result instead of executing a duplicate transfer. This makes safe retries possible without double-spending.
 
 ### Pessimistic locking
 
-Wallet balances are read and written under `SELECT ... FOR UPDATE` locks. The lock acquisition order is deterministic (lower UUID first) to prevent deadlocks. Within a single `@Transactional` method, the state machine transitions atomically: `INITIALIZED -> PENDING -> COMPLETED` or `INITIALIZED -> PENDING -> FAILED`. For P2M transfers the `SERVICE_FEE` wallet is locked as a third participant after source and target.
+Wallet metadata rows are locked (`SELECT ... FOR UPDATE`) to serialize concurrent transfers on the same account. The lock acquisition order is deterministic (lower UUID first) to prevent deadlocks. Balance itself is derived from the `ledger_entries` table — the wallet row lock simply serializes access so that running-balance computations within the transaction see consistent data.
+
+Within a single `@Transactional` method, the state machine transitions atomically: `INITIALIZED -> PENDING -> COMPLETED` or `INITIALIZED -> PENDING -> FAILED`. For P2M transfers the `SERVICE_FEE` wallet is locked as a third participant after source and target.
 
 ### Refunds create new transactions
 
@@ -62,6 +82,7 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 | **Pessimistic write locks** | Prevents race conditions on balance updates. Locks acquired in ascending ID order to avoid deadlocks |
 | **State machine enum** | `INITIALIZED -> PENDING -> COMPLETED/FAILED` with `canTransitionTo()` guards. Invalid transitions are rejected at compile-visible level |
 | **Immutable refund trail** | Refunds create a new transaction instead of flipping a status. Both entries are preserved |
+| **Ledger-based balance** | `Wallet.balance` is removed; balance is derived from the last `LedgerEntry.running_balance`. Provides full audit trail and point-in-time reconstruction |
 | **P2M fee model** | Merchant pays the processing fee (deducted from received amount). Fee is non-refundable on P2M refunds |
 | **Service fee wallet** | Internal `SERVICE_FEE` wallet collects fees. Auto-created on startup. API blocks manual creation |
 | **RS256 JWT verification** | Tokens are validated using only the public key. No database lookup, no network call to auth-service |
