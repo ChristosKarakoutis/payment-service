@@ -5,6 +5,8 @@ import io.swagger.v3.oas.annotations.media.Schema;
 import java.math.BigDecimal;
 import java.time.Instant;
 
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
+
 @Schema(description = "Wallet details")
 public record WalletResponse(
         @Schema(description = "Unique wallet ID", example = "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
@@ -18,6 +20,9 @@ public record WalletResponse(
 
         @Schema(description = "ISO-4217 currency code", example = "EUR")
         String currency,
+
+        @Schema(description = "Wallet type", example = "PEER")
+        WalletType walletType,
 
         @Schema(description = "Creation timestamp")
         Instant createdAt,

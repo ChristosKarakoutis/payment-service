@@ -3,6 +3,7 @@ package com.christoskarakoutis.paymentsystem.controller;
 import com.christoskarakoutis.paymentsystem.dto.TransactionRequest;
 import com.christoskarakoutis.paymentsystem.dto.TransactionResponse;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.GlobalExceptionHandler;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
@@ -61,7 +62,7 @@ class TransactionControllerTest {
     }
 
     private Wallet userWallet() {
-        return new Wallet("wallet-1", "test-user-id", new BigDecimal("100.00"), "EUR", null, null);
+        return new Wallet("wallet-1", "test-user-id", WalletType.PEER, new BigDecimal("100.00"), "EUR", null, null);
     }
 
     private TransactionRequest validRequest() {
@@ -99,7 +100,7 @@ class TransactionControllerTest {
     @Test
     @DisplayName("POST /api/transactions returns 403 when source wallet not owned")
     void executeTransfer_returns403WhenNotOwner() throws Exception {
-        Wallet otherWallet = new Wallet("wallet-1", "other-user", BigDecimal.ZERO, "EUR", null, null);
+        Wallet otherWallet = new Wallet("wallet-1", "other-user", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null);
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherWallet));
 
         mockMvc.perform(post("/api/transactions")
@@ -174,7 +175,7 @@ class TransactionControllerTest {
     @Test
     @DisplayName("GET /api/transactions returns 403 when wallet not owned")
     void getTransactions_returns403WhenNotOwner() throws Exception {
-        Wallet otherWallet = new Wallet("wallet-1", "other-user", BigDecimal.ZERO, "EUR", null, null);
+        Wallet otherWallet = new Wallet("wallet-1", "other-user", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null);
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherWallet));
 
         mockMvc.perform(get("/api/transactions").param("walletId", "wallet-1"))

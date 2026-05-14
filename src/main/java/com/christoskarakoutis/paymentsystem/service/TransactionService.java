@@ -2,6 +2,7 @@ package com.christoskarakoutis.paymentsystem.service;
 
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
@@ -11,8 +12,11 @@ import com.christoskarakoutis.paymentsystem.dto.TransactionRequest;
 
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.Optional;
 import java.util.List;
 import org.springframework.data.domain.Pageable;
@@ -23,6 +27,11 @@ public class TransactionService {
 
     private final TransactionRepository transactionRepository;
     private final WalletRepository walletRepository;
+
+    @Value("${payment.p2m.fee-percentage:2.5}")
+    private double feePercentage;
+
+    private static final String SERVICE_FEE_USER_ID = "SERVICE-FEE";
 
     @Transactional
     public TransactionResponse executeAtomicTransfer(TransactionRequest request) {
@@ -62,6 +71,10 @@ public class TransactionService {
                     .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
         }
 
+        if (source.getWalletType() == WalletType.MERCHANT && request.referenceTransactionId() == null) {
+            throw new IllegalArgumentException("Merchant wallets cannot initiate transfers.");
+        }
+
         tx.setSourceWallet(source);
         tx.setTargetWallet(target);
 
@@ -70,6 +83,17 @@ public class TransactionService {
         }
         tx.setStatus(TransactionStatus.PENDING);
         transactionRepository.save(tx);
+
+        boolean isP2M = source.getWalletType() == WalletType.PEER && target.getWalletType() == WalletType.MERCHANT;
+
+        BigDecimal fee = BigDecimal.ZERO;
+        Wallet feeWallet = null;
+        if (isP2M) {
+            feeWallet = walletRepository.findByUserIdWithLock(SERVICE_FEE_USER_ID)
+                    .orElseThrow(() -> new ResourceNotFoundException("Service fee wallet not found"));
+            fee = request.amount().multiply(BigDecimal.valueOf(feePercentage))
+                    .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
+        }
 
         if (source.getBalance().compareTo(request.amount()) < 0) {
             if (!tx.getStatus().canTransitionTo(TransactionStatus.FAILED)) {
@@ -83,8 +107,16 @@ public class TransactionService {
         source.setBalance(source.getBalance().subtract(request.amount()));
         target.setBalance(target.getBalance().add(request.amount()));
 
+        if (isP2M) {
+            target.setBalance(target.getBalance().subtract(fee));
+            feeWallet.setBalance(feeWallet.getBalance().add(fee));
+        }
+
         walletRepository.save(source);
         walletRepository.save(target);
+        if (feeWallet != null) {
+            walletRepository.save(feeWallet);
+        }
 
         if (!tx.getStatus().canTransitionTo(TransactionStatus.COMPLETED)) {
             throw new IllegalStateException("Cannot transition to COMPLETED from " + tx.getStatus());
@@ -106,6 +138,12 @@ public class TransactionService {
 
         if (transactionRepository.existsByReferenceTransactionId(originalTransactionId)) {
             throw new IllegalStateException("Transaction already refunded: " + originalTransactionId);
+        }
+
+        Wallet src = original.getSourceWallet();
+        Wallet tgt = original.getTargetWallet();
+        if (src.getWalletType() == WalletType.PEER && tgt.getWalletType() == WalletType.PEER) {
+            throw new IllegalArgumentException("P2P transactions cannot be refunded");
         }
 
         TransactionRequest refundRequest = new TransactionRequest(

@@ -2,6 +2,7 @@ package com.christoskarakoutis.paymentsystem.service;
 
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,30 +35,46 @@ class WalletServiceTest {
     }
 
     @Test
-    @DisplayName("createWallet saves and returns a WalletResponse")
-    void createWallet_savesAndReturnsResponse() {
+    @DisplayName("createWallet creates PEER by default")
+    void createWallet_createsPeerByDefault() {
         Wallet savedWallet = new Wallet(
-                "wallet-1", "user-1", BigDecimal.ZERO, "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null
         );
         when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
 
-        WalletResponse response = walletService.createWallet("user-1");
+        WalletResponse response = walletService.createWallet("user-1", null);
 
         assertThat(response.id()).isEqualTo("wallet-1");
-        assertThat(response.userId()).isEqualTo("user-1");
-        assertThat(response.balance()).isEqualByComparingTo(BigDecimal.ZERO);
-        assertThat(response.currency()).isEqualTo("EUR");
+        assertThat(response.walletType()).isEqualTo(WalletType.PEER);
 
         ArgumentCaptor<Wallet> captor = ArgumentCaptor.forClass(Wallet.class);
         verify(walletRepository).save(captor.capture());
-        assertThat(captor.getValue().getUserId()).isEqualTo("user-1");
+        assertThat(captor.getValue().getWalletType()).isEqualTo(WalletType.PEER);
+    }
+
+    @Test
+    @DisplayName("createWallet creates MERCHANT when specified")
+    void createWallet_createsMerchantWhenSpecified() {
+        Wallet savedWallet = new Wallet(
+                "wallet-2", "user-2", WalletType.MERCHANT, BigDecimal.ZERO, "EUR", null, null
+        );
+        when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
+
+        WalletResponse response = walletService.createWallet("user-2", WalletType.MERCHANT);
+
+        assertThat(response.id()).isEqualTo("wallet-2");
+        assertThat(response.walletType()).isEqualTo(WalletType.MERCHANT);
+
+        ArgumentCaptor<Wallet> captor = ArgumentCaptor.forClass(Wallet.class);
+        verify(walletRepository).save(captor.capture());
+        assertThat(captor.getValue().getWalletType()).isEqualTo(WalletType.MERCHANT);
     }
 
     @Test
     @DisplayName("getWalletByUserId returns wallet when found")
     void getWalletByUserId_returnsWallet() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", new BigDecimal("100.00"), "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, new BigDecimal("100.00"), "EUR", null, null
         );
         when(walletRepository.findByUserId("user-1")).thenReturn(Optional.of(wallet));
 
@@ -65,6 +82,7 @@ class WalletServiceTest {
 
         assertThat(response.id()).isEqualTo("wallet-1");
         assertThat(response.balance()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(response.walletType()).isEqualTo(WalletType.PEER);
     }
 
     @Test
@@ -81,7 +99,7 @@ class WalletServiceTest {
     @DisplayName("deleteWallet deletes wallet when found")
     void deleteWallet_deletesWhenFound() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", BigDecimal.ZERO, "EUR", null, null
+                "wallet-1", "user-1", WalletType.PEER, BigDecimal.ZERO, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
 

@@ -1,6 +1,8 @@
 package com.christoskarakoutis.paymentsystem.controller;
 
+import com.christoskarakoutis.paymentsystem.dto.WalletCreateRequest;
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
@@ -29,11 +31,16 @@ public class WalletController {
     @Operation(summary = "Create a wallet", description = "Creates a new wallet with zero balance for the authenticated user")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Wallet created"),
+            @ApiResponse(responseCode = "400", description = "Invalid wallet type"),
             @ApiResponse(responseCode = "401", description = "Not authenticated — missing or invalid JWT cookie")
     })
-    public ResponseEntity<WalletResponse> createWallet() {
+    public ResponseEntity<WalletResponse> createWallet(@RequestBody WalletCreateRequest request) {
+        WalletType type = request.type() != null ? request.type() : WalletType.PEER;
+        if (type == WalletType.SERVICE_FEE) {
+            throw new IllegalArgumentException("SERVICE_FEE wallets cannot be created via API");
+        }
         String userId = (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
-        WalletResponse response = walletService.createWallet(userId);
+        WalletResponse response = walletService.createWallet(userId, type);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 

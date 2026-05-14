@@ -5,6 +5,7 @@ import com.christoskarakoutis.paymentsystem.dto.TransactionResponse;
 import com.christoskarakoutis.paymentsystem.entity.Transaction;
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
@@ -18,6 +19,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.data.domain.PageImpl;
 import org.springframework.data.domain.Pageable;
 
+import java.lang.reflect.Field;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Optional;
@@ -41,11 +43,15 @@ class TransactionServiceTest {
     private Wallet targetWallet;
 
     @BeforeEach
-    void setUp() {
+    void setUp() throws Exception {
         transactionService = new TransactionService(transactionRepository, walletRepository);
 
-        sourceWallet = new Wallet("src-1", "user-1", new BigDecimal("200.00"), "EUR", null, null);
-        targetWallet = new Wallet("tgt-1", "user-2", new BigDecimal("50.00"), "EUR", null, null);
+        Field feeField = TransactionService.class.getDeclaredField("feePercentage");
+        feeField.setAccessible(true);
+        feeField.set(transactionService, 2.5);
+
+        sourceWallet = new Wallet("src-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
+        targetWallet = new Wallet("tgt-1", "user-2", WalletType.PEER, new BigDecimal("50.00"), "EUR", null, null);
     }
 
     private TransactionRequest request(String idempotencyKey) {
@@ -89,8 +95,8 @@ class TransactionServiceTest {
     }
 
     @Test
-    @DisplayName("completes transfer and updates balances")
-    void executeAtomicTransfer_completesSuccessfully() {
+    @DisplayName("completes PEER to PEER transfer")
+    void executeAtomicTransfer_succeedsForPeerToPeer() {
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
@@ -106,6 +112,55 @@ class TransactionServiceTest {
 
         assertThat(sourceWallet.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
         assertThat(targetWallet.getBalance()).isEqualByComparingTo(new BigDecimal("150.00"));
+    }
+
+    @Test
+    @DisplayName("completes PEER to MERCHANT transfer with fee deduction")
+    void executeAtomicTransfer_succeedsForPeerToMerchant() {
+        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, new BigDecimal("50.00"), "EUR", null, null);
+        Wallet feeWallet = new Wallet("fee-1", "SERVICE-FEE", WalletType.SERVICE_FEE, BigDecimal.ZERO, "EUR", null, null);
+
+        TransactionRequest p2mRequest = new TransactionRequest(
+                "p2m-key", "peer-1", "merc-1",
+                new BigDecimal("100.00"), "p2m payment", null
+        );
+
+        when(transactionRepository.findByIdempotencyKey("p2m-key")).thenReturn(Optional.empty());
+        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
+        when(walletRepository.findByUserIdWithLock("SERVICE-FEE")).thenReturn(Optional.of(feeWallet));
+        when(transactionRepository.save(any(Transaction.class)))
+                .thenAnswer(invocation -> invocation.getArgument(0));
+
+        TransactionResponse response = transactionService.executeAtomicTransfer(p2mRequest);
+
+        assertThat(response.status()).isEqualTo("COMPLETED");
+        assertThat(response.amount()).isEqualByComparingTo(new BigDecimal("100.00"));
+
+        assertThat(peerWallet.getBalance()).isEqualByComparingTo(new BigDecimal("100.00"));
+        assertThat(merchantWallet.getBalance()).isEqualByComparingTo(new BigDecimal("147.50"));
+        assertThat(feeWallet.getBalance()).isEqualByComparingTo(new BigDecimal("2.50"));
+    }
+
+    @Test
+    @DisplayName("throws when MERCHANT initiates a send without referenceTransactionId")
+    void executeAtomicTransfer_throwsForMerchantInitiatedSend() {
+        Wallet merchantWallet = new Wallet("merc-1", "user-1", WalletType.MERCHANT, new BigDecimal("200.00"), "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", "user-2", WalletType.PEER, new BigDecimal("50.00"), "EUR", null, null);
+
+        TransactionRequest badRequest = new TransactionRequest(
+                "bad-key", "merc-1", "peer-1",
+                new BigDecimal("100.00"), "merchant send", null
+        );
+
+        when(transactionRepository.findByIdempotencyKey("bad-key")).thenReturn(Optional.empty());
+        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
+
+        assertThatThrownBy(() -> transactionService.executeAtomicTransfer(badRequest))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Merchant wallets cannot initiate transfers");
     }
 
     @Test
@@ -145,32 +200,50 @@ class TransactionServiceTest {
     // ── refundTransaction ───────────────────────────────────────────────
 
     @Test
-    @DisplayName("creates refund with swapped wallets")
-    void refundTransaction_createsRefund() {
-        targetWallet.setBalance(new BigDecimal("200.00"));
-        sourceWallet.setBalance(new BigDecimal("200.00"));
-
+    @DisplayName("throws when trying to refund a P2P transaction")
+    void refundTransaction_throwsForP2P() {
         Transaction original = Transaction.builder()
-                .id("orig-1").idempotencyKey("orig-key")
+                .id("orig-p2p").idempotencyKey("orig-p2p-key")
                 .sourceWallet(sourceWallet).targetWallet(targetWallet)
                 .amount(new BigDecimal("100.00"))
                 .status(TransactionStatus.COMPLETED)
                 .build();
 
-        when(transactionRepository.findById("orig-1")).thenReturn(Optional.of(original));
-        when(transactionRepository.existsByReferenceTransactionId("orig-1")).thenReturn(false);
-        when(transactionRepository.findByIdempotencyKey("REFUND-orig-key")).thenReturn(Optional.empty());
-        when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
-        when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
+        when(transactionRepository.findById("orig-p2p")).thenReturn(Optional.of(original));
+        when(transactionRepository.existsByReferenceTransactionId("orig-p2p")).thenReturn(false);
+
+        assertThatThrownBy(() -> transactionService.refundTransaction("orig-p2p"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("P2P transactions cannot be refunded");
+    }
+
+    @Test
+    @DisplayName("refund of P2M skips merchant type check and succeeds")
+    void refundTransaction_skipsTypeCheck() {
+        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, new BigDecimal("200.00"), "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, new BigDecimal("100.00"), "EUR", null, null);
+
+        Transaction original = Transaction.builder()
+                .id("orig-p2m").idempotencyKey("orig-p2m-key")
+                .sourceWallet(peerWallet).targetWallet(merchantWallet)
+                .amount(new BigDecimal("100.00"))
+                .status(TransactionStatus.COMPLETED)
+                .build();
+
+        when(transactionRepository.findById("orig-p2m")).thenReturn(Optional.of(original));
+        when(transactionRepository.existsByReferenceTransactionId("orig-p2m")).thenReturn(false);
+        when(transactionRepository.findByIdempotencyKey("REFUND-orig-p2m-key")).thenReturn(Optional.empty());
+        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
 
-        TransactionResponse response = transactionService.refundTransaction("orig-1");
+        TransactionResponse response = transactionService.refundTransaction("orig-p2m");
 
         assertThat(response.status()).isEqualTo("COMPLETED");
-        assertThat(response.sourceWalletId()).isEqualTo("tgt-1");
-        assertThat(response.targetWalletId()).isEqualTo("src-1");
-        assertThat(response.referenceTransactionId()).isEqualTo("orig-1");
+        assertThat(response.sourceWalletId()).isEqualTo("merc-1");
+        assertThat(response.targetWalletId()).isEqualTo("peer-1");
+        assertThat(response.referenceTransactionId()).isEqualTo("orig-p2m");
     }
 
     @Test

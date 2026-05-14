@@ -1,6 +1,7 @@
 package com.christoskarakoutis.paymentsystem.service;
 
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
+import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
@@ -14,10 +15,14 @@ import java.math.BigDecimal;
 public class WalletService {
         private final WalletRepository walletRepository;
 
-        public WalletResponse createWallet(String userId) {
+        public WalletResponse createWallet(String userId, WalletType walletType) {
+            if (walletType == null) {
+                walletType = WalletType.PEER;
+            }
             Wallet wallet = new Wallet(
                     null,
                     userId,
+                    walletType,
                     BigDecimal.ZERO,
                     "EUR",
                     null,
@@ -31,6 +36,7 @@ public class WalletService {
                     wallet.getUserId(),
                     wallet.getBalance(),
                     wallet.getCurrency(),
+                    wallet.getWalletType(),
                     wallet.getCreatedAt(),
                     wallet.getUpdatedAt()
             );
@@ -45,6 +51,7 @@ public class WalletService {
                 wallet.getUserId(),
                 wallet.getBalance(),
                 wallet.getCurrency(),
+                wallet.getWalletType(),
                 wallet.getCreatedAt(),
                 wallet.getUpdatedAt()
         );
