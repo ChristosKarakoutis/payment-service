@@ -58,8 +58,8 @@ class TransactionServiceTest {
         feeField.setAccessible(true);
         feeField.set(transactionService, 2.5);
 
-        sourceWallet = new Wallet("src-1", "user-1", WalletType.PEER, "EUR", null, null);
-        targetWallet = new Wallet("tgt-1", "user-2", WalletType.PEER, "EUR", null, null);
+        sourceWallet = new Wallet("src-1", null, "user-1", WalletType.PEER, "EUR", null, null);
+        targetWallet = new Wallet("tgt-1", null, "user-2", WalletType.PEER, "EUR", null, null);
 
         lastSourceEntry = LedgerEntry.builder()
                 .accountId("src-1").runningBalance(new BigDecimal("200.00")).build();
@@ -111,6 +111,8 @@ class TransactionServiceTest {
     @DisplayName("completes PEER to PEER transfer with ledger entries")
     void executeAtomicTransfer_succeedsForPeerToPeer() {
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
+        when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
@@ -147,9 +149,9 @@ class TransactionServiceTest {
     @Test
     @DisplayName("completes PEER to MERCHANT transfer with fee deduction")
     void executeAtomicTransfer_succeedsForPeerToMerchant() {
-        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, "EUR", null, null);
-        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, "EUR", null, null);
-        Wallet feeWallet = new Wallet("fee-1", "SERVICE-FEE", WalletType.SERVICE_FEE, "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", null, "user-1", WalletType.PEER, "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", null, "user-2", WalletType.MERCHANT, "EUR", null, null);
+        Wallet feeWallet = new Wallet("fee-1", null, "SERVICE-FEE", WalletType.SERVICE_FEE, "EUR", null, null);
 
         LedgerEntry peerEntry = LedgerEntry.builder()
                 .accountId("peer-1").runningBalance(new BigDecimal("200.00")).build();
@@ -162,9 +164,12 @@ class TransactionServiceTest {
         );
 
         when(transactionRepository.findByIdempotencyKey("p2m-key")).thenReturn(Optional.empty());
-        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
+        when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findByUserId("SERVICE-FEE")).thenReturn(Optional.of(feeWallet));
         when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
-        when(walletRepository.findByUserIdWithLock("SERVICE-FEE")).thenReturn(Optional.of(feeWallet));
+        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findByIdWithLock("fee-1")).thenReturn(Optional.of(feeWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("peer-1"))
@@ -211,8 +216,8 @@ class TransactionServiceTest {
     @Test
     @DisplayName("throws when MERCHANT initiates a send without referenceTransactionId")
     void executeAtomicTransfer_throwsForMerchantInitiatedSend() {
-        Wallet merchantWallet = new Wallet("merc-1", "user-1", WalletType.MERCHANT, "EUR", null, null);
-        Wallet peerWallet = new Wallet("peer-1", "user-2", WalletType.PEER, "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", null, "user-1", WalletType.MERCHANT, "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", null, "user-2", WalletType.PEER, "EUR", null, null);
 
         TransactionRequest badRequest = new TransactionRequest(
                 "bad-key", "merc-1", "peer-1",
@@ -220,12 +225,13 @@ class TransactionServiceTest {
         );
 
         when(transactionRepository.findByIdempotencyKey("bad-key")).thenReturn(Optional.empty());
-        when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
-        when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
+        when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
 
         assertThatThrownBy(() -> transactionService.executeAtomicTransfer(badRequest))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Merchant wallets cannot initiate transfers");
+        verify(walletRepository, never()).findByIdWithLock(any());
     }
 
     @Test
@@ -235,6 +241,8 @@ class TransactionServiceTest {
                 .accountId("src-1").runningBalance(new BigDecimal("10.00")).build();
 
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
+        when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
@@ -252,6 +260,8 @@ class TransactionServiceTest {
     @DisplayName("completes transfer with correct ledger entries")
     void executeAtomicTransfer_updatesBalances() {
         when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
+        when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
@@ -296,8 +306,8 @@ class TransactionServiceTest {
     @Test
     @DisplayName("refund of P2M skips merchant type check and succeeds")
     void refundTransaction_skipsTypeCheck() {
-        Wallet peerWallet = new Wallet("peer-1", "user-1", WalletType.PEER, "EUR", null, null);
-        Wallet merchantWallet = new Wallet("merc-1", "user-2", WalletType.MERCHANT, "EUR", null, null);
+        Wallet peerWallet = new Wallet("peer-1", null, "user-1", WalletType.PEER, "EUR", null, null);
+        Wallet merchantWallet = new Wallet("merc-1", null, "user-2", WalletType.MERCHANT, "EUR", null, null);
 
         LedgerEntry merchantEntry = LedgerEntry.builder()
                 .accountId("merc-1").runningBalance(new BigDecimal("100.00")).build();
@@ -314,6 +324,8 @@ class TransactionServiceTest {
         when(transactionRepository.findById("orig-p2m")).thenReturn(Optional.of(original));
         when(transactionRepository.existsByReferenceTransactionId("orig-p2m")).thenReturn(false);
         when(transactionRepository.findByIdempotencyKey("REFUND-orig-p2m-key")).thenReturn(Optional.empty());
+        when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
+        when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
         when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
         when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
         when(transactionRepository.save(any(Transaction.class)))

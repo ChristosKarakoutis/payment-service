@@ -1,10 +1,7 @@
 package com.christoskarakoutis.paymentsystem.entity;
 
 import jakarta.persistence.*;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
+import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 
 import java.math.BigDecimal;
@@ -14,16 +11,20 @@ import java.time.Instant;
 @Table(name = "transactions", indexes = {
         @Index(name = "idx_tx_idempotency", columnList = "idempotencyKey", unique = true)
 })
-@Data
+@Getter
+@Setter
+@ToString(exclude = {"sourceWallet", "targetWallet"})
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
-
 public class Transaction {
 
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
+
+    @Version
+    private Long version;
 
     @Column(nullable = false, unique = true)
     private String idempotencyKey;

@@ -42,7 +42,7 @@ class WalletServiceTest {
     @DisplayName("createWallet creates PEER by default")
     void createWallet_createsPeerByDefault() {
         Wallet savedWallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
 
@@ -60,7 +60,7 @@ class WalletServiceTest {
     @DisplayName("createWallet creates MERCHANT when specified")
     void createWallet_createsMerchantWhenSpecified() {
         Wallet savedWallet = new Wallet(
-                "wallet-2", "user-2", WalletType.MERCHANT, "EUR", null, null
+                "wallet-2", null, "user-2", WalletType.MERCHANT, "EUR", null, null
         );
         when(walletRepository.save(any(Wallet.class))).thenReturn(savedWallet);
 
@@ -78,7 +78,7 @@ class WalletServiceTest {
     @DisplayName("getWalletByUserId returns wallet when found")
     void getWalletByUserId_returnsWallet() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         LedgerEntry lastEntry = LedgerEntry.builder()
                 .accountId("wallet-1").runningBalance(new BigDecimal("100.00")).build();
@@ -108,7 +108,7 @@ class WalletServiceTest {
     @DisplayName("deleteWallet deletes wallet when found and balance is zero")
     void deleteWallet_deletesWhenFound() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
         when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
@@ -116,6 +116,7 @@ class WalletServiceTest {
 
         walletService.deleteWallet("wallet-1");
 
+        verify(ledgerEntryRepository).deleteByAccountId("wallet-1");
         verify(walletRepository).delete(wallet);
     }
 
@@ -133,7 +134,7 @@ class WalletServiceTest {
     @DisplayName("deleteWallet throws when balance is non-zero")
     void deleteWallet_throwsWhenNonZeroBalance() {
         Wallet wallet = new Wallet(
-                "wallet-1", "user-1", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         LedgerEntry lastEntry = LedgerEntry.builder()
                 .accountId("wallet-1").runningBalance(new BigDecimal("50.00")).build();

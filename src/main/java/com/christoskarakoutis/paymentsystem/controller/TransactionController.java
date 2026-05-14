@@ -48,18 +48,36 @@ public class TransactionController {
         if (!sourceWallet.getUserId().equals(userId)) {
             throw new AccessDeniedException("Source wallet does not belong to the authenticated user");
         }
-        TransactionResponse response = transactionService.executeAtomicTransfer(request);
+        TransactionRequest sanitized = new TransactionRequest(
+                request.idempotencyKey(),
+                request.sourceWalletId(),
+                request.targetWalletId(),
+                request.amount(),
+                request.description(),
+                null
+        );
+        TransactionResponse response = transactionService.executeAtomicTransfer(sanitized);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @PostMapping("/{id}/refund")
-    @Operation(summary = "Refund a completed transaction", description = "Creates a reverse transfer (source and target swapped) for a completed transaction")
+    @Operation(summary = "Refund a completed transaction", description = "Creates a reverse transfer (source and target swapped) for a completed transaction. You must own one of the wallets involved.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Refund completed"),
             @ApiResponse(responseCode = "400", description = "Transaction not COMPLETED or already refunded"),
+            @ApiResponse(responseCode = "403", description = "You are not involved in this transaction"),
             @ApiResponse(responseCode = "404", description = "Original transaction not found")
     })
     public ResponseEntity<TransactionResponse> refundTransaction(@PathVariable String id) {
+        String userId = (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
+        TransactionResponse original = transactionService.getTransaction(id);
+        Wallet srcWallet = walletRepository.findById(original.sourceWalletId())
+                .orElseThrow(() -> new ResourceNotFoundException("Source wallet not found: " + original.sourceWalletId()));
+        Wallet tgtWallet = walletRepository.findById(original.targetWalletId())
+                .orElseThrow(() -> new ResourceNotFoundException("Target wallet not found: " + original.targetWalletId()));
+        if (!srcWallet.getUserId().equals(userId) && !tgtWallet.getUserId().equals(userId)) {
+            throw new AccessDeniedException("You are not involved in this transaction");
+        }
         TransactionResponse response = transactionService.refundTransaction(id);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }

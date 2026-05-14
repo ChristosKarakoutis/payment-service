@@ -22,6 +22,9 @@ public class LedgerEntry {
     @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
 
+    @Version
+    private Long version;
+
     @Column(name = "account_id", nullable = false)
     private String accountId;
 

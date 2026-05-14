@@ -62,7 +62,7 @@ class TransactionControllerTest {
     }
 
     private Wallet userWallet() {
-        return new Wallet("wallet-1", "test-user-id", WalletType.PEER, "EUR", null, null);
+        return new Wallet("wallet-1", null, "test-user-id", WalletType.PEER, "EUR", null, null);
     }
 
     private TransactionRequest validRequest() {
@@ -100,7 +100,7 @@ class TransactionControllerTest {
     @Test
     @DisplayName("POST /api/transactions returns 403 when source wallet not owned")
     void executeTransfer_returns403WhenNotOwner() throws Exception {
-        Wallet otherWallet = new Wallet("wallet-1", "other-user", WalletType.PEER, "EUR", null, null);
+        Wallet otherWallet = new Wallet("wallet-1", null, "other-user", WalletType.PEER, "EUR", null, null);
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherWallet));
 
         mockMvc.perform(post("/api/transactions")
@@ -137,13 +137,30 @@ class TransactionControllerTest {
     // ── POST /api/transactions/{id}/refund ─────────────────────────────
 
     @Test
-    @DisplayName("POST /api/transactions/{id}/refund returns 201")
+    @DisplayName("POST /api/transactions/{id}/refund returns 201 when source wallet owned by user")
     void refundTransaction_returns201() throws Exception {
+        Wallet otherWallet = new Wallet("wallet-2", null, "other-user", WalletType.PEER, "EUR", null, null);
+        when(transactionService.getTransaction("tx-1")).thenReturn(completedResponse());
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
+        when(walletRepository.findById("wallet-2")).thenReturn(Optional.of(otherWallet));
         when(transactionService.refundTransaction("tx-1")).thenReturn(completedResponse());
 
         mockMvc.perform(post("/api/transactions/tx-1/refund"))
                 .andExpect(status().isCreated())
                 .andExpect(jsonPath("$.id").value("tx-1"));
+    }
+
+    @Test
+    @DisplayName("POST /api/transactions/{id}/refund returns 403 when neither wallet belongs to the user")
+    void refundTransaction_returns403WhenNotInvolved() throws Exception {
+        Wallet otherSrc = new Wallet("wallet-1", null, "other-user", WalletType.PEER, "EUR", null, null);
+        Wallet otherTgt = new Wallet("wallet-2", null, "stranger", WalletType.PEER, "EUR", null, null);
+        when(transactionService.getTransaction("tx-1")).thenReturn(completedResponse());
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherSrc));
+        when(walletRepository.findById("wallet-2")).thenReturn(Optional.of(otherTgt));
+
+        mockMvc.perform(post("/api/transactions/tx-1/refund"))
+                .andExpect(status().isForbidden());
     }
 
     // ── GET /api/transactions/{id} ─────────────────────────────────────
@@ -175,7 +192,7 @@ class TransactionControllerTest {
     @Test
     @DisplayName("GET /api/transactions returns 403 when wallet not owned")
     void getTransactions_returns403WhenNotOwner() throws Exception {
-        Wallet otherWallet = new Wallet("wallet-1", "other-user", WalletType.PEER, "EUR", null, null);
+        Wallet otherWallet = new Wallet("wallet-1", null, "other-user", WalletType.PEER, "EUR", null, null);
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherWallet));
 
         mockMvc.perform(get("/api/transactions").param("walletId", "wallet-1"))

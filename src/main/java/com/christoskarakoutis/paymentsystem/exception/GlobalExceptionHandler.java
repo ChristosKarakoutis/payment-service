@@ -1,5 +1,7 @@
 package com.christoskarakoutis.paymentsystem.exception;
 
+import jakarta.persistence.PessimisticLockException;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.AccessDeniedException;
@@ -54,6 +56,21 @@ public class GlobalExceptionHandler {
         Map<String, String> error = new HashMap<>();
         error.put("error", ex.getMessage());
         return new ResponseEntity<>(error, HttpStatus.BAD_REQUEST);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, String>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        Map<String, String> error = new HashMap<>();
+        error.put("error", "Data conflict: " + ex.getMostSpecificCause().getMessage());
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
+    }
+
+    @ExceptionHandler(PessimisticLockException.class)
+    public ResponseEntity<Map<String, String>> handlePessimisticLock(PessimisticLockException ex) {
+        log.warn("Pessimistic lock timeout or deadlock", ex);
+        Map<String, String> error = new HashMap<>();
+        error.put("error", "Could not acquire lock, please retry");
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 
     @ExceptionHandler(Exception.class)

@@ -110,7 +110,7 @@ class WalletControllerTest {
     @DisplayName("DELETE /api/wallets/{id} returns 204 when owner")
     void deleteWallet_returns204WhenOwner() throws Exception {
         Wallet wallet = new Wallet(
-                "wallet-1", "test-user-id", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "test-user-id", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(wallet));
 
@@ -124,7 +124,7 @@ class WalletControllerTest {
     @DisplayName("DELETE /api/wallets/{id} returns 403 when not owner")
     void deleteWallet_returns403WhenNotOwner() throws Exception {
         Wallet wallet = new Wallet(
-                "wallet-1", "other-user", WalletType.PEER, "EUR", null, null
+                "wallet-1", null, "other-user", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(wallet));
 

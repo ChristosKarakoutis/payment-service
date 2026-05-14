@@ -1,20 +1,17 @@
 package com.christoskarakoutis.paymentsystem.entity;
 
 import jakarta.persistence.*;
-import lombok.Data;
-import lombok.NoArgsConstructor;
-import lombok.AllArgsConstructor;
-import lombok.Builder;
+import lombok.*;
 import org.hibernate.annotations.CreationTimestamp;
 import org.hibernate.annotations.UpdateTimestamp;
 
 import java.time.Instant;
 
-import com.christoskarakoutis.paymentsystem.entity.WalletType;
-
 @Entity
 @Table(name = "wallets")
-@Data
+@Getter
+@Setter
+@ToString
 @NoArgsConstructor
 @AllArgsConstructor
 @Builder
@@ -23,6 +20,9 @@ public class Wallet {
     @Id
     @GeneratedValue(strategy = GenerationType.UUID)
     private String id;
+
+    @Version
+    private Long version;
 
     @Column(unique = true, nullable = false)
     private String userId;

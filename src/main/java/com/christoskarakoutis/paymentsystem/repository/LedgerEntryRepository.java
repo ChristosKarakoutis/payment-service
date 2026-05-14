@@ -9,4 +9,6 @@ import java.util.Optional;
 @Repository
 public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, String> {
     Optional<LedgerEntry> findTopByAccountIdOrderByCreatedAtDesc(String accountId);
+
+    void deleteByAccountId(String accountId);
 }

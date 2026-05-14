@@ -20,8 +20,7 @@ import org.springframework.stereotype.Service;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.Optional;
-import java.util.List;
+import java.util.*;
 import org.springframework.data.domain.Pageable;
 
 @Service
@@ -62,21 +61,44 @@ public class TransactionService {
 
         Wallet source;
         Wallet target;
+        boolean isP2M;
+        BigDecimal fee = BigDecimal.ZERO;
+        Wallet feeWallet = null;
+        String feeWalletId = null;
 
-        if (sourceId.compareTo(targetId) < 0) {
-            source = walletRepository.findByIdWithLock(sourceId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
-            target = walletRepository.findByIdWithLock(targetId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + targetId));
-        } else {
-            target = walletRepository.findByIdWithLock(targetId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + targetId));
-            source = walletRepository.findByIdWithLock(sourceId)
-                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
+        Wallet sourceMeta = walletRepository.findById(sourceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
+        Wallet targetMeta = walletRepository.findById(targetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + targetId));
+
+        if (sourceMeta.getWalletType() == WalletType.MERCHANT && request.referenceTransactionId() == null) {
+            throw new IllegalArgumentException("Merchant wallets cannot initiate transfers.");
         }
 
-        if (source.getWalletType() == WalletType.MERCHANT && request.referenceTransactionId() == null) {
-            throw new IllegalArgumentException("Merchant wallets cannot initiate transfers.");
+        isP2M = sourceMeta.getWalletType() == WalletType.PEER && targetMeta.getWalletType() == WalletType.MERCHANT;
+
+        List<String> lockOrder = new ArrayList<>(List.of(sourceId, targetId));
+        if (isP2M) {
+            Wallet feeMeta = walletRepository.findByUserId(SERVICE_FEE_USER_ID)
+                    .orElseThrow(() -> new ResourceNotFoundException("Service fee wallet not found"));
+            feeWalletId = feeMeta.getId();
+            lockOrder.add(feeWalletId);
+            fee = request.amount().multiply(BigDecimal.valueOf(feePercentage))
+                    .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
+        }
+        lockOrder.sort(Comparator.naturalOrder());
+
+        Map<String, Wallet> lockedWallets = new HashMap<>();
+        for (String id : lockOrder) {
+            Wallet w = walletRepository.findByIdWithLock(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + id));
+            lockedWallets.put(id, w);
+        }
+
+        source = lockedWallets.get(sourceId);
+        target = lockedWallets.get(targetId);
+        if (isP2M) {
+            feeWallet = lockedWallets.get(feeWalletId);
         }
 
         tx.setSourceWallet(source);
@@ -87,17 +109,6 @@ public class TransactionService {
         }
         tx.setStatus(TransactionStatus.PENDING);
         transactionRepository.save(tx);
-
-        boolean isP2M = source.getWalletType() == WalletType.PEER && target.getWalletType() == WalletType.MERCHANT;
-
-        BigDecimal fee = BigDecimal.ZERO;
-        Wallet feeWallet = null;
-        if (isP2M) {
-            feeWallet = walletRepository.findByUserIdWithLock(SERVICE_FEE_USER_ID)
-                    .orElseThrow(() -> new ResourceNotFoundException("Service fee wallet not found"));
-            fee = request.amount().multiply(BigDecimal.valueOf(feePercentage))
-                    .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
-        }
 
         BigDecimal sourceBalance = getCurrentBalance(sourceId);
 

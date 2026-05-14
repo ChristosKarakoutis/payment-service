@@ -7,6 +7,7 @@ import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
+import jakarta.transaction.Transactional;
 import org.springframework.stereotype.Service;
 import lombok.RequiredArgsConstructor;
 
@@ -56,6 +57,7 @@ public class WalletService {
         );
     }
 
+    @Transactional
     public void deleteWallet(String walletId) {
         Wallet wallet = walletRepository.findByIdWithLock(walletId)
                 .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + walletId));
@@ -65,6 +67,7 @@ public class WalletService {
             throw new IllegalStateException("Cannot delete wallet with non-zero balance: " + balance);
         }
 
+        ledgerEntryRepository.deleteByAccountId(walletId);
         walletRepository.delete(wallet);
     }
 
