@@ -59,50 +59,10 @@ public class TransactionService {
                 .build();
         transactionRepository.save(tx);
 
-        Wallet source;
-        Wallet target;
-        boolean isP2M;
-        BigDecimal fee = BigDecimal.ZERO;
-        Wallet feeWallet = null;
-        String feeWalletId = null;
+        LockContext ctx = acquireLocks(sourceId, targetId, request);
 
-        Wallet sourceMeta = walletRepository.findById(sourceId)
-                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
-        Wallet targetMeta = walletRepository.findById(targetId)
-                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + targetId));
-
-        if (sourceMeta.getWalletType() == WalletType.MERCHANT && request.referenceTransactionId() == null) {
-            throw new IllegalArgumentException("Merchant wallets cannot initiate transfers.");
-        }
-
-        isP2M = sourceMeta.getWalletType() == WalletType.PEER && targetMeta.getWalletType() == WalletType.MERCHANT;
-
-        List<String> lockOrder = new ArrayList<>(List.of(sourceId, targetId));
-        if (isP2M) {
-            Wallet feeMeta = walletRepository.findByUserId(SERVICE_FEE_USER_ID)
-                    .orElseThrow(() -> new ResourceNotFoundException("Service fee wallet not found"));
-            feeWalletId = feeMeta.getId();
-            lockOrder.add(feeWalletId);
-            fee = request.amount().multiply(BigDecimal.valueOf(feePercentage))
-                    .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
-        }
-        lockOrder.sort(Comparator.naturalOrder());
-
-        Map<String, Wallet> lockedWallets = new HashMap<>();
-        for (String id : lockOrder) {
-            Wallet w = walletRepository.findByIdWithLock(id)
-                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + id));
-            lockedWallets.put(id, w);
-        }
-
-        source = lockedWallets.get(sourceId);
-        target = lockedWallets.get(targetId);
-        if (isP2M) {
-            feeWallet = lockedWallets.get(feeWalletId);
-        }
-
-        tx.setSourceWallet(source);
-        tx.setTargetWallet(target);
+        tx.setSourceWallet(ctx.source());
+        tx.setTargetWallet(ctx.target());
 
         if (!tx.getStatus().canTransitionTo(TransactionStatus.PENDING)) {
             throw new IllegalStateException("Cannot transition to PENDING from " + tx.getStatus());
@@ -128,11 +88,11 @@ public class TransactionService {
         saveLedgerEntry(sourceId, tx.getId(), LedgerEntryType.DEBIT, request.amount(), sourceNewBalance);
         saveLedgerEntry(targetId, tx.getId(), LedgerEntryType.CREDIT, request.amount(), targetNewBalance);
 
-        if (isP2M) {
-            BigDecimal merchantAfterFee = targetNewBalance.subtract(fee);
-            BigDecimal feeBalance = getCurrentBalance(feeWallet.getId());
-            saveLedgerEntry(targetId, tx.getId(), LedgerEntryType.DEBIT, fee, merchantAfterFee);
-            saveLedgerEntry(feeWallet.getId(), tx.getId(), LedgerEntryType.CREDIT, fee, feeBalance.add(fee));
+        if (ctx.isP2M()) {
+            BigDecimal merchantAfterFee = targetNewBalance.subtract(ctx.fee());
+            BigDecimal feeBalance = getCurrentBalance(ctx.feeWallet().getId());
+            saveLedgerEntry(targetId, tx.getId(), LedgerEntryType.DEBIT, ctx.fee(), merchantAfterFee);
+            saveLedgerEntry(ctx.feeWallet().getId(), tx.getId(), LedgerEntryType.CREDIT, ctx.fee(), feeBalance.add(ctx.fee()));
         }
 
         if (!tx.getStatus().canTransitionTo(TransactionStatus.COMPLETED)) {
@@ -142,6 +102,50 @@ public class TransactionService {
         transactionRepository.save(tx);
 
         return toResponse(tx);
+    }
+
+    private record LockContext(Wallet source, Wallet target, Wallet feeWallet, BigDecimal fee, boolean isP2M) {}
+
+    // Reads wallet metadata, resolves P2M fee wallet, then locks all wallets in sorted UUID order to prevent deadlocks.
+    private LockContext acquireLocks(String sourceId, String targetId, TransactionRequest request) {
+        Wallet sourceMeta = walletRepository.findById(sourceId)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + sourceId));
+        Wallet targetMeta = walletRepository.findById(targetId)
+                .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + targetId));
+
+        if (sourceMeta.getWalletType() == WalletType.MERCHANT && request.referenceTransactionId() == null) {
+            throw new IllegalArgumentException("Merchant wallets cannot initiate transfers.");
+        }
+
+        boolean isP2M = sourceMeta.getWalletType() == WalletType.PEER
+                && targetMeta.getWalletType() == WalletType.MERCHANT;
+
+        List<String> lockOrder = new ArrayList<>(List.of(sourceId, targetId));
+        BigDecimal fee = BigDecimal.ZERO;
+        String feeWalletId = null;
+
+        if (isP2M) {
+            Wallet feeMeta = walletRepository.findByUserId(SERVICE_FEE_USER_ID)
+                    .orElseThrow(() -> new ResourceNotFoundException("Service fee wallet not found"));
+            feeWalletId = feeMeta.getId();
+            lockOrder.add(feeWalletId);
+            fee = request.amount().multiply(BigDecimal.valueOf(feePercentage))
+                    .divide(BigDecimal.valueOf(100), 4, RoundingMode.HALF_UP);
+        }
+        lockOrder.sort(Comparator.naturalOrder());
+
+        Map<String, Wallet> lockedWallets = new HashMap<>();
+        for (String id : lockOrder) {
+            Wallet w = walletRepository.findByIdWithLock(id)
+                    .orElseThrow(() -> new ResourceNotFoundException("Wallet not found: " + id));
+            lockedWallets.put(id, w);
+        }
+
+        Wallet source = lockedWallets.get(sourceId);
+        Wallet target = lockedWallets.get(targetId);
+        Wallet feeWallet = isP2M ? lockedWallets.get(feeWalletId) : null;
+
+        return new LockContext(source, target, feeWallet, fee, isP2M);
     }
 
     private BigDecimal getCurrentBalance(String accountId) {
