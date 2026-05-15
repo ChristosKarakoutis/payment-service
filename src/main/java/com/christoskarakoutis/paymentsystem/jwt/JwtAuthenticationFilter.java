@@ -1,5 +1,6 @@
 package com.christoskarakoutis.paymentsystem.jwt;
 
+import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
 import jakarta.servlet.http.Cookie;
@@ -44,20 +45,26 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             return;
         }
 
-        String userEmail = jwtService.extractUsername(token);
+        try {
+            String userEmail = jwtService.extractUsername(token);
 
-        if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null
-                && !jwtService.isTokenExpired(token)) {
+            if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null
+                    && !jwtService.isTokenExpired(token)) {
 
-            String userId = jwtService.extractUserId(token);
+                String userId = jwtService.extractUserId(token);
 
-            UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
-                    new User(userEmail, "", List.of()), null, List.of()
-            );
-            authToken.setDetails(userId);
+                UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
+                        new User(userEmail, "", List.of()), null, List.of()
+                );
+                authToken.setDetails(userId);
 
-            SecurityContextHolder.getContext().setAuthentication(authToken);
+                SecurityContextHolder.getContext().setAuthentication(authToken);
+            }
+        } catch (JwtException e) {
+            response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or expired token");
+            return;
         }
+
         filterChain.doFilter(request, response);
     }
 }
