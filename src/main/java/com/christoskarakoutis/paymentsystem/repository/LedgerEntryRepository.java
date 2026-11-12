@@ -7,8 +7,6 @@ import org.springframework.stereotype.Repository;
 import java.util.Optional;
 
 @Repository
-public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, String> {
-    Optional<LedgerEntry> findTopByAccountIdOrderByCreatedAtDesc(String accountId);
-
-    void deleteByAccountId(String accountId);
+public interface LedgerEntryRepository extends JpaRepository<LedgerEntry, Long> {
+    Optional<LedgerEntry> findTopByAccountIdOrderByIdDesc(String accountId);
 }

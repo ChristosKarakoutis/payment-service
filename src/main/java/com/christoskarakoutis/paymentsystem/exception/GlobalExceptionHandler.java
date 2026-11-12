@@ -60,8 +60,18 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(DataIntegrityViolationException.class)
     public ResponseEntity<Map<String, String>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        // Constraint names and SQL details stay in the logs; the client gets a generic message.
+        log.warn("Data integrity violation", ex);
         Map<String, String> error = new HashMap<>();
-        error.put("error", "Data conflict: " + ex.getMostSpecificCause().getMessage());
+        error.put("error", "The request conflicts with existing data. "
+                + "If this was a transfer, retry with the same idempotency key to get the original result.");
+        return new ResponseEntity<>(error, HttpStatus.CONFLICT);
+    }
+
+    @ExceptionHandler(IdempotencyConflictException.class)
+    public ResponseEntity<Map<String, String>> handleIdempotencyConflict(IdempotencyConflictException ex) {
+        Map<String, String> error = new HashMap<>();
+        error.put("error", ex.getMessage());
         return new ResponseEntity<>(error, HttpStatus.CONFLICT);
     }
 

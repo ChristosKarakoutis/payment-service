@@ -1,5 +1,6 @@
 package com.christoskarakoutis.paymentsystem.jwt;
 
+import io.jsonwebtoken.Claims;
 import io.jsonwebtoken.JwtException;
 import jakarta.servlet.FilterChain;
 import jakarta.servlet.ServletException;
@@ -46,13 +47,21 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         }
 
         try {
-            String userEmail = jwtService.extractUsername(token);
+            // One parse per request: verifies the signature and the expiry.
+            Claims claims = jwtService.parseClaims(token);
 
-            if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null
-                    && !jwtService.isTokenExpired(token)) {
+            // Tokens without a "typ" claim are treated as access tokens. Any other type
+            // (for example an MFA challenge token) must never grant access to this service.
+            String tokenType = claims.get("typ", String.class);
+            if (tokenType != null && !JwtService.ACCESS_TOKEN_TYPE.equals(tokenType)) {
+                response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or expired token");
+                return;
+            }
 
-                String userId = jwtService.extractUserId(token);
+            String userEmail = claims.getSubject();
+            String userId = claims.get("user_id", String.class);
 
+            if (userEmail != null && SecurityContextHolder.getContext().getAuthentication() == null) {
                 UsernamePasswordAuthenticationToken authToken = new UsernamePasswordAuthenticationToken(
                         new User(userEmail, "", List.of()), null, List.of()
                 );
@@ -60,7 +69,7 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
 
                 SecurityContextHolder.getContext().setAuthentication(authToken);
             }
-        } catch (JwtException e) {
+        } catch (JwtException | IllegalArgumentException e) {
             response.sendError(HttpServletResponse.SC_UNAUTHORIZED, "Invalid or expired token");
             return;
         }

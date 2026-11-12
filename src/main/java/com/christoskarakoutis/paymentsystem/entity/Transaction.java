@@ -8,8 +8,10 @@ import java.math.BigDecimal;
 import java.time.Instant;
 
 @Entity
-@Table(name = "transactions", indexes = {
-        @Index(name = "idx_tx_idempotency", columnList = "idempotencyKey", unique = true)
+// Idempotency keys are scoped to the source wallet, so two users can never collide
+// on (or read) each other's transactions through the same key.
+@Table(name = "transactions", uniqueConstraints = {
+        @UniqueConstraint(name = "uk_tx_source_idempotency", columnNames = {"source_wallet_id", "idempotency_key"})
 })
 @Getter
 @Setter
@@ -26,7 +28,7 @@ public class Transaction {
     @Version
     private Long version;
 
-    @Column(nullable = false, unique = true)
+    @Column(name = "idempotency_key", nullable = false)
     private String idempotencyKey;
 
     @Column(name = "reference_tx_id")

@@ -6,6 +6,7 @@ import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
+import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
@@ -30,12 +31,14 @@ class WalletServiceTest {
     private WalletRepository walletRepository;
     @Mock
     private LedgerEntryRepository ledgerEntryRepository;
+    @Mock
+    private TransactionRepository transactionRepository;
 
     private WalletService walletService;
 
     @BeforeEach
     void setUp() {
-        walletService = new WalletService(walletRepository, ledgerEntryRepository);
+        walletService = new WalletService(walletRepository, ledgerEntryRepository, transactionRepository);
     }
 
     @Test
@@ -84,7 +87,7 @@ class WalletServiceTest {
                 .accountId("wallet-1").runningBalance(new BigDecimal("100.00")).build();
 
         when(walletRepository.findByUserId("user-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.of(lastEntry));
 
         WalletResponse response = walletService.getWalletByUserId("user-1");
@@ -111,13 +114,31 @@ class WalletServiceTest {
                 "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.empty());
 
         walletService.deleteWallet("wallet-1");
 
-        verify(ledgerEntryRepository).deleteByAccountId("wallet-1");
         verify(walletRepository).delete(wallet);
+    }
+
+    @Test
+    @DisplayName("deleteWallet throws when wallet has transaction history, and keeps the ledger")
+    void deleteWallet_throwsWhenHasTransactionHistory() {
+        Wallet wallet = new Wallet(
+                "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
+        );
+        when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
+                .thenReturn(Optional.empty());
+        when(transactionRepository.existsBySourceWalletIdOrTargetWalletId("wallet-1", "wallet-1"))
+                .thenReturn(true);
+
+        assertThatThrownBy(() -> walletService.deleteWallet("wallet-1"))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("transaction history");
+
+        verify(walletRepository, never()).delete(any());
     }
 
     @Test
@@ -140,7 +161,7 @@ class WalletServiceTest {
                 .accountId("wallet-1").runningBalance(new BigDecimal("50.00")).build();
 
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.of(lastEntry));
 
         assertThatThrownBy(() -> walletService.deleteWallet("wallet-1"))

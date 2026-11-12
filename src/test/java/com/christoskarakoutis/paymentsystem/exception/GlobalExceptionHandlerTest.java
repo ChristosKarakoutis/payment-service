@@ -29,7 +29,10 @@ class GlobalExceptionHandlerTest {
         ResponseEntity<Map<String, String>> response = handler.handleDataIntegrityViolation(ex);
 
         assertThat(response.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
-        assertThat(Objects.requireNonNull(response.getBody()).get("error")).contains("duplicate key value");
+        String message = Objects.requireNonNull(response.getBody()).get("error");
+        assertThat(message).contains("conflicts with existing data");
+        // Raw database details must never reach the client.
+        assertThat(message).doesNotContain("duplicate key").doesNotContain("constraint");
     }
 
     @Test

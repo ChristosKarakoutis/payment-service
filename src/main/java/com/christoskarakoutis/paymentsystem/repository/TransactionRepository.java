@@ -11,9 +11,9 @@ import java.util.Optional;
 @Repository
 public interface TransactionRepository extends JpaRepository<Transaction, String>{
 
-    boolean existsByIdempotencyKey(String idempotencyKey);
-    Optional<Transaction> findByIdempotencyKey(String idempotencyKey);
+    Optional<Transaction> findBySourceWalletIdAndIdempotencyKey(String sourceWalletId, String idempotencyKey);
     boolean existsByReferenceTransactionId(String referenceTransactionId);
+    boolean existsBySourceWalletIdOrTargetWalletId(String sourceWalletId, String targetWalletId);
     Page<Transaction> findAllBySourceWalletIdOrTargetWalletId(
             String sourceId, String targetId, Pageable pageable
     );

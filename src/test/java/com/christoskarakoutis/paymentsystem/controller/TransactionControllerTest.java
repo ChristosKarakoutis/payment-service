@@ -5,6 +5,7 @@ import com.christoskarakoutis.paymentsystem.dto.TransactionResponse;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.GlobalExceptionHandler;
+import com.christoskarakoutis.paymentsystem.exception.IdempotencyConflictException;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import com.christoskarakoutis.paymentsystem.service.TransactionService;
@@ -166,13 +167,60 @@ class TransactionControllerTest {
     // ── GET /api/transactions/{id} ─────────────────────────────────────
 
     @Test
-    @DisplayName("GET /api/transactions/{id} returns 200")
+    @DisplayName("GET /api/transactions/{id} returns 200 when user owns the source wallet")
     void getTransaction_returns200() throws Exception {
+        Wallet targetOwnedByOther = new Wallet("wallet-2", null, "other-user", WalletType.PEER, "EUR", null, null);
         when(transactionService.getTransaction("tx-1")).thenReturn(completedResponse());
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
+        when(walletRepository.findById("wallet-2")).thenReturn(Optional.of(targetOwnedByOther));
 
         mockMvc.perform(get("/api/transactions/tx-1"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value("tx-1"));
+    }
+
+    @Test
+    @DisplayName("GET /api/transactions/{id} returns 403 when user is not involved in the transaction")
+    void getTransaction_returns403WhenNotInvolved() throws Exception {
+        Wallet otherSrc = new Wallet("wallet-1", null, "other-user", WalletType.PEER, "EUR", null, null);
+        Wallet otherTgt = new Wallet("wallet-2", null, "stranger", WalletType.PEER, "EUR", null, null);
+        when(transactionService.getTransaction("tx-1")).thenReturn(completedResponse());
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(otherSrc));
+        when(walletRepository.findById("wallet-2")).thenReturn(Optional.of(otherTgt));
+
+        mockMvc.perform(get("/api/transactions/tx-1"))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("POST /api/transactions returns 422 when the transfer FAILED (insufficient balance)")
+    void executeTransfer_returns422WhenFailed() throws Exception {
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
+        TransactionResponse failed = new TransactionResponse(
+                "tx-2", "idem-1", "wallet-1", "wallet-2",
+                new BigDecimal("50.00"), "test payment",
+                "FAILED", null, Instant.now()
+        );
+        when(transactionService.executeAtomicTransfer(any(TransactionRequest.class))).thenReturn(failed);
+
+        mockMvc.perform(post("/api/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest())))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.status").value("FAILED"));
+    }
+
+    @Test
+    @DisplayName("POST /api/transactions returns 409 when idempotency key is reused with a different payload")
+    void executeTransfer_returns409OnConflict() throws Exception {
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
+        when(transactionService.executeAtomicTransfer(any(TransactionRequest.class)))
+                .thenThrow(new IdempotencyConflictException("Idempotency key already used with a different target or amount"));
+
+        mockMvc.perform(post("/api/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest())))
+                .andExpect(status().isConflict());
     }
 
     // ── GET /api/transactions?walletId= ────────────────────────────────
