@@ -79,7 +79,7 @@ public class WalletService {
     }
 
     private BigDecimal getCurrentBalance(String accountId) {
-        return ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc(accountId)
+        return ledgerEntryRepository.findTopByAccountIdOrderByIdDesc(accountId)
                 .map(LedgerEntry::getRunningBalance)
                 .orElse(BigDecimal.ZERO);
     }

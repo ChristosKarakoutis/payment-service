@@ -139,9 +139,9 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("src-1"))
                 .thenReturn(Optional.of(lastSourceEntry));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("tgt-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("tgt-1"))
                 .thenReturn(Optional.of(lastTargetEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
@@ -194,11 +194,11 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("fee-1")).thenReturn(Optional.of(feeWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("peer-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("peer-1"))
                 .thenReturn(Optional.of(peerEntry));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("merc-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("merc-1"))
                 .thenReturn(Optional.of(merchantEntry));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("fee-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("fee-1"))
                 .thenReturn(Optional.empty());
 
         TransactionResponse response = transactionService.executeAtomicTransfer(p2mRequest);
@@ -269,7 +269,7 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("src-1"))
                 .thenReturn(Optional.of(lowBalanceEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
@@ -288,9 +288,9 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("src-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("src-1"))
                 .thenReturn(Optional.of(lastSourceEntry));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("tgt-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("tgt-1"))
                 .thenReturn(Optional.of(lastTargetEntry));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("key-1"));
@@ -306,6 +306,24 @@ class TransactionServiceTest {
     }
 
     // ── refundTransaction ───────────────────────────────────────────────
+
+    @Test
+    @DisplayName("throws when trying to refund a refund transaction")
+    void refundTransaction_throwsForRefundOfRefund() {
+        Transaction refund = Transaction.builder()
+                .id("refund-1").idempotencyKey("REFUND-orig-p2m-key")
+                .sourceWallet(targetWallet).targetWallet(sourceWallet)
+                .amount(new BigDecimal("100.00"))
+                .referenceTransactionId("orig-p2m")
+                .status(TransactionStatus.COMPLETED)
+                .build();
+        when(transactionRepository.findById("refund-1")).thenReturn(Optional.of(refund));
+
+        assertThatThrownBy(() -> transactionService.refundTransaction("refund-1"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Refund transactions cannot be refunded");
+        verify(transactionRepository, never()).existsByReferenceTransactionId(any());
+    }
 
     @Test
     @DisplayName("throws when trying to refund a P2P transaction")
@@ -352,9 +370,9 @@ class TransactionServiceTest {
         when(walletRepository.findByIdWithLock("peer-1")).thenReturn(Optional.of(peerWallet));
         when(transactionRepository.save(any(Transaction.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("merc-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("merc-1"))
                 .thenReturn(Optional.of(merchantEntry));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("peer-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("peer-1"))
                 .thenReturn(Optional.of(peerEntry));
 
         TransactionResponse response = transactionService.refundTransaction("orig-p2m");

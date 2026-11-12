@@ -163,7 +163,7 @@ public class TransactionService {
     }
 
     private BigDecimal getCurrentBalance(String accountId) {
-        return ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc(accountId)
+        return ledgerEntryRepository.findTopByAccountIdOrderByIdDesc(accountId)
                 .map(LedgerEntry::getRunningBalance)
                 .orElse(BigDecimal.ZERO);
     }
@@ -186,6 +186,11 @@ public class TransactionService {
 
         if (original.getStatus() != TransactionStatus.COMPLETED) {
             throw new IllegalStateException("Can only refund COMPLETED transactions");
+        }
+
+        // A refund is itself a reversal. Refunding it would re-charge the merchant fee.
+        if (original.getReferenceTransactionId() != null) {
+            throw new IllegalArgumentException("Refund transactions cannot be refunded");
         }
 
         if (transactionRepository.existsByReferenceTransactionId(originalTransactionId)) {

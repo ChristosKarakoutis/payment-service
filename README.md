@@ -54,7 +54,7 @@ ledger_entries
 └── created_at   → immutable timestamp
 ```
 
-The current balance of any wallet is the `running_balance` of its most recent `LedgerEntry`. For new wallets with no entries, the balance is `0`. This provides a full audit trail — every debit and credit is recorded and can be reconstructed point-in-time.
+The current balance of any wallet is the `running_balance` of its most recent `LedgerEntry`, meaning the one with the highest database-generated `id`. `createdAt` is not used for ordering, because it can tie or drift between application instances. For new wallets with no entries, the balance is `0`. This provides a full audit trail — every debit and credit is recorded and can be reconstructed point-in-time.
 
 During a P2P transfer four entries are inserted (2 DEBIT/CREDIT pairs). During a P2M transfer six entries are inserted (accounting for the fee deduction from the merchant and credit to the `SERVICE_FEE` wallet).
 
@@ -63,6 +63,8 @@ During a P2P transfer four entries are inserted (2 DEBIT/CREDIT pairs). During a
 Every transfer request includes an `idempotencyKey` (client-generated UUID). If a request fails due to a network error and the client retries with the same key, the service returns the original result instead of executing a duplicate transfer. This makes safe retries possible without double-spending.
 
 Keys are scoped to the source wallet, so one user's key can never return another user's transaction. Reusing a key with a different target wallet or amount returns `409 Conflict`.
+
+A transfer that fails for insufficient balance is recorded as `FAILED` and returned with `422 Unprocessable`. Its key is then used up: retry with a new key once the balance is sufficient.
 
 ### Pessimistic locking
 
@@ -74,7 +76,7 @@ Within a single `@Transactional` method, the state machine transitions atomicall
 
 Refunds are not status changes on the original transaction. A new transaction is created with `referenceTransactionId` pointing to the original, and the source/target wallets are swapped. This preserves an immutable audit trail: every debit has a corresponding credit entry.
 
-Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears the full amount including the non-refunded fee. P2P refunds are rejected since there is no merchant relationship to hold responsible.
+Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears the full amount including the non-refunded fee. P2P refunds are rejected since there is no merchant relationship to hold responsible. A refund cannot itself be refunded, because that would charge the merchant fee a second time.
 
 ### Architecture decisions
 
@@ -88,6 +90,8 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 | **P2M fee model** | Merchant pays the processing fee (deducted from received amount). Fee is non-refundable on P2M refunds |
 | **Service fee wallet** | Internal `SERVICE_FEE` wallet collects fees. Auto-created on startup. API blocks manual creation |
 | **RS256 JWT verification** | Tokens are validated using only the public key. No database lookup, no network call to auth-service |
+| **Token type check** | Only tokens whose `typ` claim is absent or `access` grant access. A valid signature alone is not enough, so MFA challenge tokens cannot be used here |
+| **Login rate limit** | Nginx limits `/api/auth/{login,register,refresh}` per client IP to 10 requests/minute, with bursts of 5 |
 | **Cookie-based auth** | `jwt_access_token` cookie is set by auth-service. This service only verifies; it never issues tokens |
 | **Self-contained Dockerfile** | Maven build in stage 1, JRE runtime in stage 2. No external build tools needed at deploy time |
 | **Split RSA key volumes** | Docker Compose generates a fresh keypair each deploy via a `keygen` service. The private key goes only to the `auth_keys` volume (auth-service). Payment mounts `public_keys`, which contains only the public key |
@@ -127,9 +131,18 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 
 ### Quick start
 
-```bash
-docker compose up --build
-```
+1. Build the auth JAR from the auth-service repository and copy it to `auth-service/app.jar`. It is not tracked in git.
+2. Create the database secrets:
+
+   ```bash
+   cp .env.example .env   # then replace the placeholder passwords
+   ```
+
+3. Start the stack:
+
+   ```bash
+   docker compose up --build
+   ```
 
 The API will be available at `https://localhost`.
 
@@ -173,9 +186,9 @@ Once the application is running, access the Swagger UI:
 | POST | `/api/wallets` | Create a wallet (zero balance, EUR default). Accepts optional `{"type": "PEER"}` or `{"type": "MERCHANT"}` body; defaults to `PEER` | Yes |
 | GET | `/api/wallets/me` | Get the authenticated user's wallet | Yes |
 | DELETE | `/api/wallets/{walletId}` | Delete a wallet (must be owner, balance must be zero, and the wallet must have no transaction history) | Yes |
-| POST | `/api/transactions` | Execute an atomic fund transfer (idempotent). Returns 400 if merchant initiates a send | Yes |
-| POST | `/api/transactions/{id}/refund` | Refund a completed P2M transaction. Returns 400 if P2P or already refunded | Yes |
-| GET | `/api/transactions/{id}` | Get a single transaction | Yes |
+| POST | `/api/transactions` | Execute an atomic fund transfer (idempotent). Returns 400 if merchant initiates a send, 409 if the key was reused with a different payload, 422 if the transfer FAILED (insufficient balance) | Yes |
+| POST | `/api/transactions/{id}/refund` | Refund a completed P2M transaction. Returns 400 if P2P, already refunded, or itself a refund. Returns 422 if the refund FAILED | Yes |
+| GET | `/api/transactions/{id}` | Get a single transaction. Returns 403 unless you own the source or target wallet | Yes |
 | GET | `/api/transactions?walletId=` | List transactions for a wallet | Yes |
 
 ## Environment Variables
@@ -185,7 +198,9 @@ Once the application is running, access the Swagger UI:
 | `JWT_PUBLIC_KEY` | Path to RSA public key (X.509 PEM) | `classpath:keys/public.pem` |
 | `SPRING_DATASOURCE_URL` | PostgreSQL JDBC URL | `jdbc:postgresql://payment-db:5432/payment_system` |
 | `SPRING_DATASOURCE_USERNAME` | Database username | `admin` |
-| `SPRING_DATASOURCE_PASSWORD` | Database password | `password` |
+| `PAYMENT_DB_PASSWORD` | Payment database password (read from `.env` by Compose, required) | none |
+| `AUTH_DB_PASSWORD` | Auth database password (read from `.env` by Compose, required) | none |
+| `SPRING_DATASOURCE_PASSWORD` | Database password, set by Compose from `PAYMENT_DB_PASSWORD` | none (required) |
 | `SPRING_JPA_HIBERNATE_DDL_AUTO` | Schema generation strategy | `update` |
 | `PAYMENT_P2M_FEE_PERCENTAGE` | Percentage deducted from P2M transfers as service fee | `2.5` |
 
@@ -199,3 +214,7 @@ openssl pkey -in keys/private.pem -pubout -out keys/public.pem
 ```
 
 Never commit private keys to version control. The public key in `src/main/resources/keys/` is a dev-only default and must be overridden via `JWT_PUBLIC_KEY` in any non-local deployment.
+
+Database ports are bound to `127.0.0.1` only, so the databases are not reachable from other machines. Passwords come from `.env`, which is gitignored.
+
+Known gap: the schema is still managed by `ddl-auto: update`, with no migration tool. Flyway or Liquibase is the next step, so that schema changes are versioned and reviewed.

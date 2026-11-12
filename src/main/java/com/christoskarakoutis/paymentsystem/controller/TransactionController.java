@@ -39,7 +39,9 @@ public class TransactionController {
             @ApiResponse(responseCode = "201", description = "Transfer completed or idempotent response returned"),
             @ApiResponse(responseCode = "400", description = "Validation error or same-wallet transfer"),
             @ApiResponse(responseCode = "403", description = "Source wallet belongs to another user"),
-            @ApiResponse(responseCode = "404", description = "Source or target wallet not found")
+            @ApiResponse(responseCode = "404", description = "Source or target wallet not found"),
+            @ApiResponse(responseCode = "409", description = "Idempotency key reused with a different target or amount"),
+            @ApiResponse(responseCode = "422", description = "Transfer FAILED (insufficient balance). The transaction is recorded and the key is consumed; retry with a new key")
     })
     public ResponseEntity<TransactionResponse> executeTransfer(@Valid @RequestBody TransactionRequest request) {
         String userId = (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
@@ -57,14 +59,15 @@ public class TransactionController {
                 null
         );
         TransactionResponse response = transactionService.executeAtomicTransfer(sanitized);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return transferResponse(response);
     }
 
     @PostMapping("/{id}/refund")
     @Operation(summary = "Refund a completed transaction", description = "Creates a reverse transfer (source and target swapped) for a completed transaction. You must own one of the wallets involved.")
     @ApiResponses({
             @ApiResponse(responseCode = "201", description = "Refund completed"),
-            @ApiResponse(responseCode = "400", description = "Transaction not COMPLETED or already refunded"),
+            @ApiResponse(responseCode = "400", description = "Transaction not COMPLETED, already refunded, P2P, or itself a refund"),
+            @ApiResponse(responseCode = "422", description = "Refund FAILED (merchant has insufficient balance)"),
             @ApiResponse(responseCode = "403", description = "You are not involved in this transaction"),
             @ApiResponse(responseCode = "404", description = "Original transaction not found")
     })
@@ -73,7 +76,7 @@ public class TransactionController {
         TransactionResponse original = transactionService.getTransaction(id);
         assertInvolved(original, userId);
         TransactionResponse response = transactionService.refundTransaction(id);
-        return ResponseEntity.status(HttpStatus.CREATED).body(response);
+        return transferResponse(response);
     }
 
     @GetMapping("/{id}")
@@ -88,6 +91,17 @@ public class TransactionController {
         TransactionResponse response = transactionService.getTransaction(id);
         assertInvolved(response, userId);
         return ResponseEntity.ok(response);
+    }
+
+    /**
+     * A FAILED transaction (for example, insufficient balance) is recorded and its idempotency key is
+     * consumed, so it is reported as 422 rather than as a successful 201.
+     */
+    private ResponseEntity<TransactionResponse> transferResponse(TransactionResponse response) {
+        HttpStatus status = "FAILED".equals(response.status())
+                ? HttpStatus.valueOf(422)
+                : HttpStatus.CREATED;
+        return ResponseEntity.status(status).body(response);
     }
 
     private String currentUserId() {

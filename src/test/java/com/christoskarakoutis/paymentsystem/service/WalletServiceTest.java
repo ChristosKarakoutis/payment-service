@@ -87,7 +87,7 @@ class WalletServiceTest {
                 .accountId("wallet-1").runningBalance(new BigDecimal("100.00")).build();
 
         when(walletRepository.findByUserId("user-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.of(lastEntry));
 
         WalletResponse response = walletService.getWalletByUserId("user-1");
@@ -114,7 +114,7 @@ class WalletServiceTest {
                 "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.empty());
 
         walletService.deleteWallet("wallet-1");
@@ -129,7 +129,7 @@ class WalletServiceTest {
                 "wallet-1", null, "user-1", WalletType.PEER, "EUR", null, null
         );
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.empty());
         when(transactionRepository.existsBySourceWalletIdOrTargetWalletId("wallet-1", "wallet-1"))
                 .thenReturn(true);
@@ -161,7 +161,7 @@ class WalletServiceTest {
                 .accountId("wallet-1").runningBalance(new BigDecimal("50.00")).build();
 
         when(walletRepository.findByIdWithLock("wallet-1")).thenReturn(Optional.of(wallet));
-        when(ledgerEntryRepository.findTopByAccountIdOrderByCreatedAtDesc("wallet-1"))
+        when(ledgerEntryRepository.findTopByAccountIdOrderByIdDesc("wallet-1"))
                 .thenReturn(Optional.of(lastEntry));
 
         assertThatThrownBy(() -> walletService.deleteWallet("wallet-1"))

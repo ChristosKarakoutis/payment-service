@@ -21,7 +21,15 @@ public class JwtService {
     @Value("${security.jwt.public-key}")
     private Resource publicKeyResource;
 
-    private PublicKey verificationKey;
+    /** Value of the "typ" claim for tokens that may grant access. Other types must never be accepted here. */
+    public static final String ACCESS_TOKEN_TYPE = "access";
+
+    private volatile PublicKey verificationKey;
+
+    /** Verifies signature and expiry, then returns all claims. Throws JwtException when invalid. */
+    public Claims parseClaims(String token) {
+        return extractAllClaims(token);
+    }
 
     public String extractUsername(String token) {
         return extractClaim(token, Claims::getSubject);
@@ -53,11 +61,18 @@ public class JwtService {
                 .getPayload();
     }
 
-    private synchronized PublicKey getVerificationKey() {
-        if (verificationKey == null) {
-            verificationKey = readPublicKey(loadPem(publicKeyResource));
+    // Double-checked locking: the lock is only taken until the key has been loaded once.
+    private PublicKey getVerificationKey() {
+        PublicKey key = verificationKey;
+        if (key == null) {
+            synchronized (this) {
+                if (verificationKey == null) {
+                    verificationKey = readPublicKey(loadPem(publicKeyResource));
+                }
+                key = verificationKey;
+            }
         }
-        return verificationKey;
+        return key;
     }
 
     private String loadPem(Resource resource) {

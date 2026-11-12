@@ -18,9 +18,11 @@ import java.time.Instant;
 @Builder
 public class LedgerEntry {
 
+    // Database-generated, monotonically increasing. "Latest entry" is defined by this id,
+    // not by createdAt, which can tie or drift between application instances.
     @Id
-    @GeneratedValue(strategy = GenerationType.UUID)
-    private String id;
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Long id;
 
     @Version
     private Long version;

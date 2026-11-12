@@ -193,6 +193,24 @@ class TransactionControllerTest {
     }
 
     @Test
+    @DisplayName("POST /api/transactions returns 422 when the transfer FAILED (insufficient balance)")
+    void executeTransfer_returns422WhenFailed() throws Exception {
+        when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
+        TransactionResponse failed = new TransactionResponse(
+                "tx-2", "idem-1", "wallet-1", "wallet-2",
+                new BigDecimal("50.00"), "test payment",
+                "FAILED", null, Instant.now()
+        );
+        when(transactionService.executeAtomicTransfer(any(TransactionRequest.class))).thenReturn(failed);
+
+        mockMvc.perform(post("/api/transactions")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content(objectMapper.writeValueAsString(validRequest())))
+                .andExpect(status().isUnprocessableEntity())
+                .andExpect(jsonPath("$.status").value("FAILED"));
+    }
+
+    @Test
     @DisplayName("POST /api/transactions returns 409 when idempotency key is reused with a different payload")
     void executeTransfer_returns409OnConflict() throws Exception {
         when(walletRepository.findById("wallet-1")).thenReturn(Optional.of(userWallet()));
