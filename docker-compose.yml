@@ -2,15 +2,20 @@ services:
   keygen:
     image: alpine:latest
     container_name: payment-system-keygen
+    # The private key is written only to auth_keys (mounted by auth-service).
+    # Only the public key is copied to public_keys (mounted by payment-service).
     entrypoint: >
       sh -c "
         apk add --no-cache openssl > /dev/null 2>&1 &&
-        openssl genpkey -algorithm RSA -out /keys/private.pem -pkeyopt rsa_keygen_bits:2048 > /dev/null 2>&1 &&
-        openssl pkey -in /keys/private.pem -pubout -out /keys/public.pem > /dev/null 2>&1 &&
-        chmod 644 /keys/*.pem
+        openssl genpkey -algorithm RSA -out /auth-keys/private.pem -pkeyopt rsa_keygen_bits:2048 > /dev/null 2>&1 &&
+        openssl pkey -in /auth-keys/private.pem -pubout -out /auth-keys/public.pem > /dev/null 2>&1 &&
+        cp /auth-keys/public.pem /public-keys/public.pem &&
+        chmod 600 /auth-keys/private.pem &&
+        chmod 644 /auth-keys/public.pem /public-keys/public.pem
       "
     volumes:
-      - shared_keys:/keys
+      - auth_keys:/auth-keys
+      - public_keys:/public-keys
 
   auth-db:
     image: postgres:16-alpine
@@ -57,7 +62,7 @@ services:
       JWT_PRIVATE_KEY: file:/keys/private.pem
       JWT_PUBLIC_KEY: file:/keys/public.pem
     volumes:
-      - shared_keys:/keys
+      - auth_keys:/keys
     depends_on:
       keygen:
         condition: service_completed_successfully
@@ -74,7 +79,7 @@ services:
       SPRING_JPA_HIBERNATE_DDL_AUTO: update
       JWT_PUBLIC_KEY: file:/keys/public.pem
     volumes:
-      - shared_keys:/keys
+      - public_keys:/keys
     depends_on:
       keygen:
         condition: service_completed_successfully
@@ -95,6 +100,7 @@ services:
       - payment-service
 
 volumes:
-  shared_keys:
+  auth_keys:
+  public_keys:
   auth_postgres_data:
   payment_postgres_data:

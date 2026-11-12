@@ -69,28 +69,40 @@ public class TransactionController {
             @ApiResponse(responseCode = "404", description = "Original transaction not found")
     })
     public ResponseEntity<TransactionResponse> refundTransaction(@PathVariable String id) {
-        String userId = (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
+        String userId = currentUserId();
         TransactionResponse original = transactionService.getTransaction(id);
-        Wallet srcWallet = walletRepository.findById(original.sourceWalletId())
-                .orElseThrow(() -> new ResourceNotFoundException("Source wallet not found: " + original.sourceWalletId()));
-        Wallet tgtWallet = walletRepository.findById(original.targetWalletId())
-                .orElseThrow(() -> new ResourceNotFoundException("Target wallet not found: " + original.targetWalletId()));
-        if (!srcWallet.getUserId().equals(userId) && !tgtWallet.getUserId().equals(userId)) {
-            throw new AccessDeniedException("You are not involved in this transaction");
-        }
+        assertInvolved(original, userId);
         TransactionResponse response = transactionService.refundTransaction(id);
         return ResponseEntity.status(HttpStatus.CREATED).body(response);
     }
 
     @GetMapping("/{id}")
-    @Operation(summary = "Get a transaction by ID")
+    @Operation(summary = "Get a transaction by ID", description = "Only returns the transaction if the authenticated user owns one of the wallets involved.")
     @ApiResponses({
             @ApiResponse(responseCode = "200", description = "Transaction found"),
+            @ApiResponse(responseCode = "403", description = "You are not involved in this transaction"),
             @ApiResponse(responseCode = "404", description = "Transaction not found")
     })
     public ResponseEntity<TransactionResponse> getTransaction(@PathVariable String id) {
+        String userId = currentUserId();
         TransactionResponse response = transactionService.getTransaction(id);
+        assertInvolved(response, userId);
         return ResponseEntity.ok(response);
+    }
+
+    private String currentUserId() {
+        return (String) SecurityContextHolder.getContext().getAuthentication().getDetails();
+    }
+
+    /** Allows access only when the user owns the source or the target wallet of the transaction. */
+    private void assertInvolved(TransactionResponse transaction, String userId) {
+        Wallet srcWallet = walletRepository.findById(transaction.sourceWalletId())
+                .orElseThrow(() -> new ResourceNotFoundException("Source wallet not found: " + transaction.sourceWalletId()));
+        Wallet tgtWallet = walletRepository.findById(transaction.targetWalletId())
+                .orElseThrow(() -> new ResourceNotFoundException("Target wallet not found: " + transaction.targetWalletId()));
+        if (!srcWallet.getUserId().equals(userId) && !tgtWallet.getUserId().equals(userId)) {
+            throw new AccessDeniedException("You are not involved in this transaction");
+        }
     }
 
     @GetMapping

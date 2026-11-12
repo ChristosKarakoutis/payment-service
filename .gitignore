@@ -35,3 +35,6 @@ build/
 # Local Docker artifacts
 certs/
 keys/
+
+# Pre-built auth JAR: never tracked (it embeds the dev private key). Build locally and copy in.
+auth-service/app.jar

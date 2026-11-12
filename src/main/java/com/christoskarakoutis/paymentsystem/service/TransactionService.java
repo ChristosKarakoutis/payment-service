@@ -5,6 +5,7 @@ import com.christoskarakoutis.paymentsystem.entity.LedgerEntryType;
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
+import com.christoskarakoutis.paymentsystem.exception.IdempotencyConflictException;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
@@ -38,9 +39,17 @@ public class TransactionService {
 
     @Transactional
     public TransactionResponse executeAtomicTransfer(TransactionRequest request) {
-        Optional<Transaction> existing = transactionRepository.findByIdempotencyKey(request.idempotencyKey());
+        // Scoped to the source wallet: the controller has already verified the caller owns it,
+        // so a key can only ever return a transaction that caller initiated.
+        Optional<Transaction> existing = transactionRepository
+                .findBySourceWalletIdAndIdempotencyKey(request.sourceWalletId(), request.idempotencyKey());
         if (existing.isPresent()) {
-            return toResponse(existing.get());
+            Transaction previous = existing.get();
+            if (!isSameRequest(previous, request)) {
+                throw new IdempotencyConflictException(
+                        "Idempotency key already used with a different target or amount");
+            }
+            return toResponse(previous);
         }
 
         String sourceId = request.sourceWalletId();
@@ -102,6 +111,11 @@ public class TransactionService {
         transactionRepository.save(tx);
 
         return toResponse(tx);
+    }
+
+    private boolean isSameRequest(Transaction previous, TransactionRequest request) {
+        return previous.getTargetWallet().getId().equals(request.targetWalletId())
+                && previous.getAmount().compareTo(request.amount()) == 0;
     }
 
     private record LockContext(Wallet source, Wallet target, Wallet feeWallet, BigDecimal fee, boolean isP2M) {}

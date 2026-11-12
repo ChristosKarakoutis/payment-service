@@ -18,7 +18,7 @@ A stateless payment microservice for atomic fund transfers between wallets. Inte
 
 Nginx terminates TLS and routes by path prefix. Auth-service and payment-service each have their own PostgreSQL database. The payment service never communicates with the auth service directly. It validates JWTs cryptographically using the shared RSA public key.
 
-The entire stack runs inside a single Docker Compose file within this repository. The authentication JAR is pre-built and tracked in git, served via a minimal Dockerfile. No external repositories are required at runtime.
+The entire stack runs inside a single Docker Compose file within this repository. The authentication JAR is pre-built and **not tracked in git** (it embeds a dev private key). Build it from the auth-service repository and place it at `auth-service/app.jar` before running Compose.
 
 ### Wallet types
 
@@ -62,6 +62,8 @@ During a P2P transfer four entries are inserted (2 DEBIT/CREDIT pairs). During a
 
 Every transfer request includes an `idempotencyKey` (client-generated UUID). If a request fails due to a network error and the client retries with the same key, the service returns the original result instead of executing a duplicate transfer. This makes safe retries possible without double-spending.
 
+Keys are scoped to the source wallet, so one user's key can never return another user's transaction. Reusing a key with a different target wallet or amount returns `409 Conflict`.
+
 ### Pessimistic locking
 
 Wallet metadata rows are locked (`SELECT ... FOR UPDATE`) to serialize concurrent transfers on the same account. The lock acquisition order is deterministic (lower UUID first) to prevent deadlocks. Balance itself is derived from the `ledger_entries` table — the wallet row lock simply serializes access so that running-balance computations within the transaction see consistent data.
@@ -78,7 +80,7 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 
 | Decision | Rationale |
 |----------|-----------|
-| **Idempotency-key dedup** | Clients can safely retry without duplicate transfers. The key is stored with a unique constraint |
+| **Idempotency-key dedup** | Clients can safely retry without duplicate transfers. The key is unique per source wallet and reuse with a different payload is rejected |
 | **Pessimistic write locks** | Prevents race conditions on balance updates. Locks acquired in ascending ID order to avoid deadlocks |
 | **State machine enum** | `INITIALIZED -> PENDING -> COMPLETED/FAILED` with `canTransitionTo()` guards. Invalid transitions are rejected at compile-visible level |
 | **Immutable refund trail** | Refunds create a new transaction instead of flipping a status. Both entries are preserved |
@@ -88,7 +90,7 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 | **RS256 JWT verification** | Tokens are validated using only the public key. No database lookup, no network call to auth-service |
 | **Cookie-based auth** | `jwt_access_token` cookie is set by auth-service. This service only verifies; it never issues tokens |
 | **Self-contained Dockerfile** | Maven build in stage 1, JRE runtime in stage 2. No external build tools needed at deploy time |
-| **Shared RSA key mount** | Docker Compose generates fresh keypair each deploy via a `keygen` service. Both auth and payment mount the same `./keys` volume |
+| **Split RSA key volumes** | Docker Compose generates a fresh keypair each deploy via a `keygen` service. The private key goes only to the `auth_keys` volume (auth-service). Payment mounts `public_keys`, which contains only the public key |
 
 ### Stateless vs stateful endpoints
 
@@ -99,7 +101,7 @@ Only P2M (`PEER→MERCHANT`) transactions can be refunded — the merchant bears
 | `DELETE /api/wallets/{id}` | Yes | Must lock and delete wallet |
 | `POST /api/transactions` | Yes | Must lock wallets, update balances, persist transaction |
 | `POST /api/transactions/{id}/refund` | Yes | Must look up original transaction and create refund |
-| `GET /api/transactions/{id}` | Yes | Must read transaction from DB |
+| `GET /api/transactions/{id}` | Yes | Must read transaction from DB and verify the caller is a party to it |
 | `GET /api/transactions?walletId=` | Yes | Must query transactions by wallet |
 | All JWT validation | **No** | Token is verified cryptographically with the RSA public key |
 
@@ -145,9 +147,9 @@ mkcert -key-file certs/localhost-key.pem -cert-file certs/localhost.pem localhos
 payment-system/
 ├── auth-service/
 │   ├── Dockerfile            # Runs the pre-built auth JAR
-│   └── app.jar               # Auth JAR (pre-built, tracked in git)
+│   └── app.jar               # Auth JAR (pre-built, NOT tracked in git)
 ├── certs/                    # TLS certificates (gitignored)
-├── keys/                     # Shared RSA keypair (generated, gitignored)
+├── keys/                     # Local key material (gitignored)
 ├── docker-compose.yml        # Full-stack orchestrator
 ├── nginx.conf                # Path-based routing config
 ├── Dockerfile                # Payment service Dockerfile
@@ -170,7 +172,7 @@ Once the application is running, access the Swagger UI:
 |--------|----------|-------------|---------------|
 | POST | `/api/wallets` | Create a wallet (zero balance, EUR default). Accepts optional `{"type": "PEER"}` or `{"type": "MERCHANT"}` body; defaults to `PEER` | Yes |
 | GET | `/api/wallets/me` | Get the authenticated user's wallet | Yes |
-| DELETE | `/api/wallets/{walletId}` | Delete a wallet (must be owner, balance must be zero) | Yes |
+| DELETE | `/api/wallets/{walletId}` | Delete a wallet (must be owner, balance must be zero, and the wallet must have no transaction history) | Yes |
 | POST | `/api/transactions` | Execute an atomic fund transfer (idempotent). Returns 400 if merchant initiates a send | Yes |
 | POST | `/api/transactions/{id}/refund` | Refund a completed P2M transaction. Returns 400 if P2P or already refunded | Yes |
 | GET | `/api/transactions/{id}` | Get a single transaction | Yes |

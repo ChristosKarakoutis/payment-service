@@ -5,6 +5,7 @@ import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
+import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
 import com.christoskarakoutis.paymentsystem.repository.WalletRepository;
 import com.christoskarakoutis.paymentsystem.dto.WalletResponse;
 import jakarta.transaction.Transactional;
@@ -18,6 +19,7 @@ import java.math.BigDecimal;
 public class WalletService {
     private final WalletRepository walletRepository;
     private final LedgerEntryRepository ledgerEntryRepository;
+    private final TransactionRepository transactionRepository;
 
     public WalletResponse createWallet(String userId, WalletType walletType) {
         if (walletType == null) {
@@ -67,7 +69,12 @@ public class WalletService {
             throw new IllegalStateException("Cannot delete wallet with non-zero balance: " + balance);
         }
 
-        ledgerEntryRepository.deleteByAccountId(walletId);
+        // Ledger entries and transactions are the audit trail. A wallet with history
+        // is closed by policy, never deleted, so the trail stays complete.
+        if (transactionRepository.existsBySourceWalletIdOrTargetWalletId(walletId, walletId)) {
+            throw new IllegalStateException("Cannot delete wallet with transaction history");
+        }
+
         walletRepository.delete(wallet);
     }
 

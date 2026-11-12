@@ -8,6 +8,7 @@ import com.christoskarakoutis.paymentsystem.entity.Transaction;
 import com.christoskarakoutis.paymentsystem.entity.TransactionStatus;
 import com.christoskarakoutis.paymentsystem.entity.Wallet;
 import com.christoskarakoutis.paymentsystem.entity.WalletType;
+import com.christoskarakoutis.paymentsystem.exception.IdempotencyConflictException;
 import com.christoskarakoutis.paymentsystem.exception.ResourceNotFoundException;
 import com.christoskarakoutis.paymentsystem.repository.LedgerEntryRepository;
 import com.christoskarakoutis.paymentsystem.repository.TransactionRepository;
@@ -85,12 +86,33 @@ class TransactionServiceTest {
                 .amount(new BigDecimal("100.00"))
                 .status(TransactionStatus.COMPLETED)
                 .build();
-        when(transactionRepository.findByIdempotencyKey("dup-key")).thenReturn(Optional.of(existing));
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("src-1", "dup-key")).thenReturn(Optional.of(existing));
 
         TransactionResponse response = transactionService.executeAtomicTransfer(request("dup-key"));
 
         assertThat(response.id()).isEqualTo("tx-1");
         assertThat(response.status()).isEqualTo("COMPLETED");
+        verify(walletRepository, never()).findByIdWithLock(any());
+    }
+
+    @Test
+    @DisplayName("throws IdempotencyConflictException when a key is reused with a different amount")
+    void executeAtomicTransfer_throwsOnConflictingKeyReuse() {
+        Transaction existing = Transaction.builder()
+                .id("tx-1").idempotencyKey("dup-key")
+                .sourceWallet(sourceWallet).targetWallet(targetWallet)
+                .amount(new BigDecimal("100.00"))
+                .status(TransactionStatus.COMPLETED)
+                .build();
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("src-1", "dup-key"))
+                .thenReturn(Optional.of(existing));
+
+        var differentAmount = new TransactionRequest(
+                "dup-key", "src-1", "tgt-1", new BigDecimal("999.00"), "other", null
+        );
+
+        assertThatThrownBy(() -> transactionService.executeAtomicTransfer(differentAmount))
+                .isInstanceOf(IdempotencyConflictException.class);
         verify(walletRepository, never()).findByIdWithLock(any());
     }
 
@@ -101,7 +123,7 @@ class TransactionServiceTest {
                 "key-1", "same-wallet", "same-wallet",
                 new BigDecimal("100.00"), "oops", null
         );
-        when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("same-wallet", "key-1")).thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> transactionService.executeAtomicTransfer(badRequest))
                 .isInstanceOf(IllegalArgumentException.class);
@@ -110,7 +132,7 @@ class TransactionServiceTest {
     @Test
     @DisplayName("completes PEER to PEER transfer with ledger entries")
     void executeAtomicTransfer_succeedsForPeerToPeer() {
-        when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("src-1", "key-1")).thenReturn(Optional.empty());
         when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
@@ -163,7 +185,7 @@ class TransactionServiceTest {
                 new BigDecimal("100.00"), "p2m payment", null
         );
 
-        when(transactionRepository.findByIdempotencyKey("p2m-key")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("peer-1", "p2m-key")).thenReturn(Optional.empty());
         when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
         when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
         when(walletRepository.findByUserId("SERVICE-FEE")).thenReturn(Optional.of(feeWallet));
@@ -224,7 +246,7 @@ class TransactionServiceTest {
                 new BigDecimal("100.00"), "merchant send", null
         );
 
-        when(transactionRepository.findByIdempotencyKey("bad-key")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("merc-1", "bad-key")).thenReturn(Optional.empty());
         when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
         when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
 
@@ -240,7 +262,7 @@ class TransactionServiceTest {
         LedgerEntry lowBalanceEntry = LedgerEntry.builder()
                 .accountId("src-1").runningBalance(new BigDecimal("10.00")).build();
 
-        when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("src-1", "key-1")).thenReturn(Optional.empty());
         when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
@@ -259,7 +281,7 @@ class TransactionServiceTest {
     @Test
     @DisplayName("completes transfer with correct ledger entries")
     void executeAtomicTransfer_updatesBalances() {
-        when(transactionRepository.findByIdempotencyKey("key-1")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("src-1", "key-1")).thenReturn(Optional.empty());
         when(walletRepository.findById("src-1")).thenReturn(Optional.of(sourceWallet));
         when(walletRepository.findById("tgt-1")).thenReturn(Optional.of(targetWallet));
         when(walletRepository.findByIdWithLock("src-1")).thenReturn(Optional.of(sourceWallet));
@@ -323,7 +345,7 @@ class TransactionServiceTest {
 
         when(transactionRepository.findById("orig-p2m")).thenReturn(Optional.of(original));
         when(transactionRepository.existsByReferenceTransactionId("orig-p2m")).thenReturn(false);
-        when(transactionRepository.findByIdempotencyKey("REFUND-orig-p2m-key")).thenReturn(Optional.empty());
+        when(transactionRepository.findBySourceWalletIdAndIdempotencyKey("merc-1", "REFUND-orig-p2m-key")).thenReturn(Optional.empty());
         when(walletRepository.findById("merc-1")).thenReturn(Optional.of(merchantWallet));
         when(walletRepository.findById("peer-1")).thenReturn(Optional.of(peerWallet));
         when(walletRepository.findByIdWithLock("merc-1")).thenReturn(Optional.of(merchantWallet));
